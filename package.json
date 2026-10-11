@@ -1,6 +1,6 @@
 {
   "name": "@moket/occt-wasm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Open CASCADE Technology 8 compiled to WebAssembly with a thin embind facade for the Moket browser CAD",
   "license": "LGPL-2.1-only",

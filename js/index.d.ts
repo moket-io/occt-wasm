@@ -22,6 +22,8 @@ export type ErrorCode =
   | 'BOOLEAN_FAILED'
   | 'FILLET_FAILED'
   | 'CHAMFER_FAILED'
+  | 'TRANSFORM_FAILED'
+  | 'DISTANCE_FAILED'
   | 'MESH_FAILED'
   | 'STEP_READ_FAILED'
   | 'STEP_WRITE_FAILED'
@@ -179,6 +181,15 @@ export interface FaceInfo {
   bbox: BBox;
   /** Face orientation is REVERSED relative to its surface. */
   reversed: boolean;
+  /** Axis of cylinders, cones, spheres (center, pole direction) and tori. */
+  axis?: Axis;
+  /** Cylinder and sphere radius, cone reference radius, torus major radius. */
+  radius?: number;
+}
+
+export interface Axis {
+  origin: [number, number, number];
+  dir: [number, number, number];
 }
 
 export interface EdgeInfo {
@@ -189,6 +200,13 @@ export interface EdgeInfo {
   /** Indices of adjacent faces (unique). */
   faces: number[];
   degenerated: boolean;
+  /** Points at the first and last curve parameter (absent for degenerated edges). */
+  start?: [number, number, number];
+  end?: [number, number, number];
+  /** Circle center and normal. */
+  axis?: Axis;
+  /** Circle radius. */
+  radius?: number;
 }
 
 export interface VertexInfo {
@@ -246,6 +264,29 @@ export type MeshResult = Result<{
 
 export type BytesResult = Result<{ bytes: Uint8Array }>;
 
+export type CheckResult = Result<{
+  /** BRepCheck_Analyzer verdict. */
+  valid: boolean;
+  shapeType: ShapeType;
+  solids: number;
+}>;
+
+/** A face, edge or vertex of a shape by its topology() index. */
+export interface SubShapeRef {
+  kind: SubShapeKind;
+  index: number;
+}
+
+export type DistanceResult = Result<{
+  /** Minimum distance. */
+  value: number;
+  /** Closest points on a and b (the first solution). */
+  pointA: [number, number, number];
+  pointB: [number, number, number];
+  /** Number of solutions; parallel faces have several. */
+  solutions: number;
+}>;
+
 export interface VersionInfo {
   occt: string;
   facade: string;
@@ -287,11 +328,21 @@ export interface OcctKernel {
   fillet(shape: ShapeId, edges: ArrayLike<number>, radius: number): OpResult;
   /** Symmetric chamfer; edges are 0-based indices from topology(shape). */
   chamfer(shape: ShapeId, edges: ArrayLike<number>, distance: number): OpResult;
+  /**
+   * Transformed copy. `matrix` is a row-major 3x4 rigid motion or reflection
+   * [r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz]. History maps every
+   * sub-shape to its copy.
+   */
+  transform(shape: ShapeId, matrix: ArrayLike<number>): OpResult;
 
   topology(shape: ShapeId): TopologyResult;
   properties(shape: ShapeId): PropertiesResult;
   /** angularDeflection in radians. */
   mesh(shape: ShapeId, linearDeflection: number, angularDeflection: number): MeshResult;
+  /** Validity only, without mass properties: much cheaper than properties(). */
+  check(shape: ShapeId): CheckResult;
+  /** Minimum distance between shapes or their sub-shapes (null = the whole shape). */
+  distance(a: ShapeId, subA: SubShapeRef | null, b: ShapeId, subB: SubShapeRef | null): DistanceResult;
 
   exportStep(shapes: ArrayLike<ShapeId>): BytesResult;
   importStep(bytes: Uint8Array | ArrayBuffer): ShapeResult;

@@ -165,6 +165,69 @@ describe('other operations', () => {
   });
 });
 
+describe('transform, check and distance', () => {
+  it('copies a shape with a rigid motion and maps every sub-shape', () => {
+    const { shape } = buildR1(k);
+    const c = Math.cos(Math.PI / 2);
+    const moved = ok(k.transform(shape, [c, -1, 0, 100, 1, c, 0, 0, 0, 0, 1, 5]));
+    const props = ok(k.properties(moved.shape));
+    expect(props.valid).toBe(true);
+    expect(props.volume).toBeCloseTo(24000, 6);
+    // Rotated 90 degrees about Z, then moved by (100, 0, 5).
+    expect(props.bbox[0]).toBeCloseTo(70, 6);
+    expect(props.bbox[3]).toBeCloseTo(100, 6);
+    expect(props.bbox[2]).toBeCloseTo(5, 6);
+    expect(moved.history.faces.modified.map((m) => m.from).sort()).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(moved.history.edges.modified).toHaveLength(12);
+    // The original is untouched.
+    expect(ok(k.properties(shape)).bbox[0]).toBeCloseTo(0, 9);
+  });
+
+  it('mirrors a shape and rejects scaling', () => {
+    const { shape } = buildR1(k);
+    const mirrored = ok(k.transform(shape, [-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]));
+    const props = ok(k.properties(mirrored.shape));
+    expect(props.valid).toBe(true);
+    expect(props.volume).toBeCloseTo(24000, 6);
+    expect(props.bbox[0]).toBeCloseTo(-40, 6);
+    const scaled = k.transform(shape, [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0]);
+    expect(scaled.ok).toBe(false);
+    if (!scaled.ok) expect(scaled.error.code).toBe('INVALID_ARGUMENT');
+  });
+
+  it('checks validity without mass properties', () => {
+    const r = ok(k.check(buildR3(k).shape));
+    expect(r).toMatchObject({ valid: true, shapeType: 'solid', solids: 1 });
+  });
+
+  it('measures the distance between sub-shapes', () => {
+    const { shape } = buildR1(k);
+    const t = ok(k.topology(shape));
+    const bottom = t.faces.findIndex((f) => f.normal[2] < -0.5);
+    const top = t.faces.findIndex((f) => f.normal[2] > 0.5);
+    const d = ok(k.distance(shape, { kind: 'face', index: bottom }, shape, { kind: 'face', index: top }));
+    expect(d.value).toBeCloseTo(20, 9);
+    expect(d.pointB[2] - d.pointA[2]).toBeCloseTo(20, 9);
+    const box = ok(k.makeBox(5, 5, 5));
+    expect(ok(k.distance(shape, null, box.shape, null)).value).toBeCloseTo(0, 9);
+    const bad = k.distance(shape, { kind: 'face', index: 99 }, shape, null);
+    expect(bad.ok).toBe(false);
+  });
+
+  it('reports axes of cylinders and circles and edge end points', () => {
+    const t = ok(k.topology(buildR2(k).shape));
+    const hole = t.faces.find((f) => f.surface === 'cylinder');
+    expect(hole?.radius).toBeCloseTo(3, 9);
+    expect(Math.abs(hole?.axis?.dir[2] ?? 0)).toBeCloseTo(1, 9);
+    const circle = t.edges.find((e) => e.curve === 'circle');
+    expect(circle?.radius).toBeCloseTo(3, 9);
+    expect(circle?.axis?.origin).toHaveLength(3);
+    const line = t.edges.find((e) => e.curve === 'line');
+    const [a, b] = [line?.start ?? [0, 0, 0], line?.end ?? [0, 0, 0]];
+    expect(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])).toBeCloseTo(line?.length ?? -1, 9);
+  });
+});
+
 describe('BRep exchange', () => {
   it('round-trips R3 through binary BRep exactly', () => {
     const { shape } = buildR3(k);

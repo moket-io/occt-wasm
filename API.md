@@ -87,12 +87,14 @@ revolve(shape: ShapeId, axisOrigin: Vec3, axisDir: Vec3, angle: number): Result<
 boolean(op: 'fuse' | 'cut' | 'common', a: ShapeId, b: ShapeId): Result<{ shape; history: History }>;
 fillet(shape: ShapeId, edges: number[], radius: number): Result<{ shape; history: History }>;
 chamfer(shape: ShapeId, edges: number[], distance: number): Result<{ shape; history: History }>;
+transform(shape: ShapeId, matrix: number[12]): Result<{ shape; history: History }>;
 ```
 
 - `extrude`: prism of a face (or wire, edge, shell) along `normalize(dir) * distance`; a negative distance extrudes backwards.
 - `revolve`: revolution about the axis; `|angle|` in (0, 2 pi].
 - `boolean`: `BRepAlgoAPI_Fuse/Cut/Common`. Input `0` is `a`, input `1` is `b`. The result is not simplified (no `UnifySameDomain`), so co-planar faces of a fuse stay split.
 - `fillet`/`chamfer`: constant radius fillet / symmetric chamfer on the given edge indices of `shape` (duplicates ignored). The result is validated with `BRepCheck_Analyzer`; an invalid result is reported as `INVALID_RESULT` instead of being returned.
+- `transform`: a transformed copy (`BRepBuilderAPI_Transform` with copy). `matrix` is row-major 3x4 `[r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz]`, a rigid motion or a reflection (a scale other than 1 is `INVALID_ARGUMENT`). History maps every face, edge and vertex to its copy (`modified`). Used for patterns and mirrors.
 - A result that is a compound with a single child is returned as that child (OCCT wraps fillet results in a compound).
 
 ### History
@@ -140,6 +142,9 @@ interface SweepInfo {
 topology(shape: ShapeId): Result<{ faces: FaceInfo[]; edges: EdgeInfo[]; vertices: VertexInfo[] }>;
 properties(shape: ShapeId): Result<Properties>;
 mesh(shape: ShapeId, linearDeflection: number, angularDeflection: number): Result<Mesh>;
+check(shape: ShapeId): Result<{ valid: boolean; shapeType; solids: number }>;
+distance(a: ShapeId, subA: { kind; index } | null, b: ShapeId, subB: { kind; index } | null):
+  Result<{ value: number; pointA: [x, y, z]; pointB: [x, y, z]; solutions: number }>;
 ```
 
 ```ts
@@ -151,6 +156,8 @@ interface FaceInfo {
   normal: [x, y, z];     // outward, at the middle of the UV range (constant for planes)
   bbox: [xmin, ymin, zmin, xmax, ymax, zmax];
   reversed: boolean;     // face orientation relative to its surface
+  axis?: { origin: [x, y, z]; dir: [x, y, z] }; // cylinder, cone, sphere (center), torus
+  radius?: number;       // cylinder, sphere; cone reference radius; torus major radius
 }
 interface EdgeInfo {
   index: number;
@@ -159,6 +166,10 @@ interface EdgeInfo {
   midpoint: [x, y, z];   // point at the middle of the parameter range
   faces: number[];       // adjacent faces, unique (a seam edge lists its face once)
   degenerated: boolean;
+  start?: [x, y, z];     // at the first and last curve parameter; absent when degenerated
+  end?: [x, y, z];
+  axis?: { origin: [x, y, z]; dir: [x, y, z] }; // circles: center and normal
+  radius?: number;       // circles
 }
 interface VertexInfo { index: number; point: [x, y, z] }
 
@@ -181,6 +192,8 @@ interface Mesh {
   edgeRanges: Uint32Array;     // [start, count] in points, one pair per edge index
 }
 ```
+
+`check()` runs only `BRepCheck_Analyzer`; use it instead of `properties()` when only validity is needed. `distance()` runs `BRepExtrema_DistShapeShape` between two shapes or sub-shapes (`{ kind: 'face' | 'edge' | 'vertex', index }`, `null` for the whole shape) and returns the first solution's points.
 
 `mesh()` drops any previous triangulation of the shape and runs `BRepMesh_IncrementalMesh` with the given linear (mm) and angular (radians) deflection. Edge polylines come from the face triangulation, so their points coincide with mesh vertices. A degenerated edge has `count = 0`.
 
@@ -205,7 +218,7 @@ importBrep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
 | `INVALID_PROFILE`     | Profile loops are open, self-intersecting or inconsistent   |
 | `INVALID_RESULT`      | Fillet/chamfer produced a shape that fails `BRepCheck`      |
 | `EMPTY_RESULT`        | The operation produced a null shape                         |
-| `EXTRUDE_FAILED`, `REVOLVE_FAILED`, `BOOLEAN_FAILED`, `FILLET_FAILED`, `CHAMFER_FAILED`, `MESH_FAILED` | The OCCT algorithm reported failure |
+| `EXTRUDE_FAILED`, `REVOLVE_FAILED`, `BOOLEAN_FAILED`, `FILLET_FAILED`, `CHAMFER_FAILED`, `TRANSFORM_FAILED`, `DISTANCE_FAILED`, `MESH_FAILED` | The OCCT algorithm reported failure |
 | `STEP_READ_FAILED`, `STEP_WRITE_FAILED`, `BREP_READ_FAILED` | Exchange failures                   |
 | `OCCT_EXCEPTION`      | An OCCT `Standard_Failure` was thrown (type and message included) |
 | `STD_EXCEPTION`, `OUT_OF_MEMORY`, `UNKNOWN_EXCEPTION` | Other C++ exceptions                        |

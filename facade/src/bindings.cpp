@@ -103,10 +103,13 @@ EMSCRIPTEN_BINDINGS(occt_wasm)
   function("boolean", &booleanOp);
   function("fillet", &fillet);
   function("chamfer", &chamfer);
+  function("transform", &transform);
 
   function("topology", &topology);
   function("properties", &properties);
   function("mesh", &mesh);
+  function("check", &check);
+  function("distance", &distance);
 
   function("exportStep", &exportStep);
   function("importStep", &importStep);

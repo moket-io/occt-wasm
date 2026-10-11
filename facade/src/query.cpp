@@ -7,6 +7,7 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepLProp_SLProps.hxx>
@@ -24,6 +25,12 @@
 #include <Poly_Triangulation.hxx>
 #include <TopExp.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cone.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Sphere.hxx>
+#include <gp_Torus.hxx>
 
 #include <cmath>
 #include <utility>
@@ -110,6 +117,86 @@ gp_Dir faceNormal(const TopoDS_Face& face, const BRepAdaptor_Surface& surf)
   return n;
 }
 
+val axisToJs(const gp_Ax1& ax)
+{
+  val a = val::object();
+  a.set("origin", pntToJs(ax.Location()));
+  a.set("dir", dirToJs(ax.Direction()));
+  return a;
+}
+
+// Axis and radius of analytic faces, for picking hole axes and measuring.
+void setSurfaceAxis(val& f, const BRepAdaptor_Surface& surf)
+{
+  switch (surf.GetType())
+  {
+    case GeomAbs_Cylinder: {
+      const gp_Cylinder c = surf.Cylinder();
+      f.set("axis", axisToJs(c.Axis()));
+      f.set("radius", c.Radius());
+      break;
+    }
+    case GeomAbs_Cone: {
+      const gp_Cone c = surf.Cone();
+      f.set("axis", axisToJs(c.Axis()));
+      f.set("radius", c.RefRadius());
+      break;
+    }
+    case GeomAbs_Sphere: {
+      const gp_Sphere c = surf.Sphere();
+      f.set("axis", axisToJs(gp_Ax1(c.Location(), c.Position().Direction())));
+      f.set("radius", c.Radius());
+      break;
+    }
+    case GeomAbs_Torus: {
+      const gp_Torus c = surf.Torus();
+      f.set("axis", axisToJs(c.Axis()));
+      f.set("radius", c.MajorRadius());
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+// Sub-shape by { kind, index }, or the whole shape when sub is null/undefined.
+TopoDS_Shape subShape(const TopoDS_Shape& shape, const val& sub, const char* name)
+{
+  if (sub.isUndefined() || sub.isNull())
+  {
+    return shape;
+  }
+  if (!sub["kind"].isString())
+  {
+    fail("INVALID_ARGUMENT", std::string(name) + ".kind must be 'face', 'edge' or 'vertex'");
+  }
+  const std::string kind = sub["kind"].as<std::string>();
+  TopAbs_ShapeEnum  type = TopAbs_SHAPE;
+  if (kind == "face")
+  {
+    type = TopAbs_FACE;
+  }
+  else if (kind == "edge")
+  {
+    type = TopAbs_EDGE;
+  }
+  else if (kind == "vertex")
+  {
+    type = TopAbs_VERTEX;
+  }
+  else
+  {
+    fail("INVALID_ARGUMENT", std::string(name) + ".kind must be 'face', 'edge' or 'vertex'");
+  }
+  const int      index = toInt(sub["index"], name);
+  const ShapeMap map   = mapOf(shape, type);
+  if (index < 0 || index >= map.Extent())
+  {
+    fail("INVALID_ARGUMENT", std::string(name) + ".index out of range");
+  }
+  return map(index + 1);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -137,6 +224,7 @@ val topology(val shapeArg)
       f.set("normal", dirToJs(faceNormal(face, surf)));
       f.set("bbox", bboxToJs(optimalBox(face)));
       f.set("reversed", face.Orientation() == TopAbs_REVERSED);
+      setSurfaceAxis(f, surf);
       jsFaces.set(i - 1, f);
     }
 
@@ -165,6 +253,14 @@ val topology(val shapeArg)
         e.set("curve", std::string(curveName(curve.GetType())));
         e.set("length", props.Mass());
         e.set("midpoint", pntToJs(curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2)));
+        e.set("start", pntToJs(curve.Value(curve.FirstParameter())));
+        e.set("end", pntToJs(curve.Value(curve.LastParameter())));
+        if (curve.GetType() == GeomAbs_Circle)
+        {
+          const gp_Circ c = curve.Circle();
+          e.set("axis", axisToJs(c.Axis()));
+          e.set("radius", c.Radius());
+        }
       }
       std::vector<int> adj;
       if (const NCollection_List<TopoDS_Shape>* anc = edgeFaces.Seek(edge))
@@ -382,6 +478,39 @@ val mesh(val shapeArg, val linearDeflection, val angularDeflection)
     r.set("faceRanges", uint32ToJs(faceRanges));
     r.set("edgePositions", float32ToJs(edgePositions));
     r.set("edgeRanges", uint32ToJs(edgeRanges));
+    return r;
+  });
+}
+
+// ---------------------------------------------------------------------------
+val check(val shapeArg)
+{
+  return guarded([&] {
+    const TopoDS_Shape& shape = arena().get(toShapeId(shapeArg, "shape"));
+    val                 r     = okResult();
+    r.set("valid", BRepCheck_Analyzer(shape).IsValid());
+    r.set("shapeType", std::string(shapeTypeName(shape.ShapeType())));
+    r.set("solids", mapOf(shape, TopAbs_SOLID).Extent());
+    return r;
+  });
+}
+
+// ---------------------------------------------------------------------------
+val distance(val a, val subA, val b, val subB)
+{
+  return guarded([&] {
+    const TopoDS_Shape sa = subShape(arena().get(toShapeId(a, "a")), subA, "subA");
+    const TopoDS_Shape sb = subShape(arena().get(toShapeId(b, "b")), subB, "subB");
+    BRepExtrema_DistShapeShape algo(sa, sb);
+    if (!algo.IsDone() || algo.NbSolution() < 1)
+    {
+      fail("DISTANCE_FAILED", "minimum distance could not be computed");
+    }
+    val r = okResult();
+    r.set("value", algo.Value());
+    r.set("pointA", pntToJs(algo.PointOnShape1(1)));
+    r.set("pointB", pntToJs(algo.PointOnShape2(1)));
+    r.set("solutions", static_cast<int>(algo.NbSolution()));
     return r;
   });
 }

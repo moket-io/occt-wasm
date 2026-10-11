@@ -27,11 +27,14 @@ val revolve(val shape, val axisOrigin, val axisDir, val angle);
 val booleanOp(val op, val a, val b);
 val fillet(val shape, val edges, val radius);
 val chamfer(val shape, val edges, val distance);
+val transform(val shape, val matrix);
 
 // Queries.
 val topology(val shape);
 val properties(val shape);
 val mesh(val shape, val linearDeflection, val angularDeflection);
+val check(val shape);
+val distance(val a, val subA, val b, val subB);
 
 // Exchange.
 val exportStep(val shapes);

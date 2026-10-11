@@ -9,6 +9,7 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeShape.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -19,6 +20,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Trsf.hxx>
 
 #include <algorithm>
 #include <cmath>
@@ -451,6 +453,29 @@ val chamfer(val shape, val edges, val distance)
     const TopoDS_Shape result = unwrap(algo.Shape());
     requireValid(result, "chamfer");
     val history = buildHistory(algo, {input}, result);
+    return opResult(arena().put(result), history);
+  });
+}
+
+val transform(val shape, val matrix)
+{
+  return guarded([&] {
+    const TopoDS_Shape&       input = arena().get(toShapeId(shape, "shape"));
+    const std::vector<double> m     = toDoubles(matrix, "matrix", 12);
+    gp_Trsf                   trsf;
+    // Row-major 3x4: rotation (possibly with a reflection) and translation.
+    trsf.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+    if (std::abs(std::abs(trsf.ScaleFactor()) - 1.0) > 1e-9)
+    {
+      fail("INVALID_ARGUMENT", "matrix must be a rigid motion or a reflection");
+    }
+    BRepBuilderAPI_Transform algo(input, trsf, true);
+    if (!algo.IsDone())
+    {
+      fail("TRANSFORM_FAILED", "transformation failed");
+    }
+    const TopoDS_Shape result  = algo.Shape();
+    val                history = buildHistory(algo, {input}, result);
     return opResult(arena().put(result), history);
   });
 }
