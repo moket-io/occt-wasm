@@ -1,0 +1,77 @@
+name: CI
+
+# The repository is private: keep this lean. One job, the OCCT layer comes
+# from the GitHub Actions cache unless its inputs changed (OCCT sources,
+# scripts/config-occt.sh, scripts/build-occt.sh, emsdk image digest).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Docker is the reference build. mode=max keeps the occt-libs stage in
+      # the cache, so a facade-only change rebuilds in a few minutes.
+      - name: Build module (Docker)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: dist
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=occt-wasm
+          cache-to: type=gha,mode=max,scope=occt-wasm
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check version pins
+        run: pnpm check:versions
+
+      - name: Size budget (brotli wasm <= 4.5 MB)
+        run: node scripts/size-report.mjs --budget-br-mb 4.5
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Unit and golden tests (Node)
+        run: pnpm test
+
+      # Chromium only in CI to save minutes; run all three browsers locally
+      # with `pnpm test:browser`.
+      - name: Browser smoke test (Chromium worker)
+        run: |
+          pnpm exec playwright install --with-deps --only-shell chromium
+          pnpm test:browser --project=chromium
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v7
+        with:
+          name: occt-wasm-dist
+          path: dist/
+          retention-days: 7

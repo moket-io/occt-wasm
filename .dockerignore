@@ -1,0 +1,14 @@
+**
+!scripts/
+!facade/
+!js/
+!third_party/occt/adm/
+!third_party/occt/src/
+!third_party/occt/CMakeLists.txt
+!third_party/occt/resources/
+!third_party/occt/LICENSE_LGPL_21.txt
+!third_party/occt/OCCT_LGPL_EXCEPTION.txt
+!LICENSE
+!OCCT_LGPL_EXCEPTION.txt
+!NOTICE
+!versions.json

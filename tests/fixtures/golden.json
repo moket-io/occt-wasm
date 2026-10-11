@@ -1,0 +1,27 @@
+{
+  "R1": {
+    "volume": 24000,
+    "bbox": [0, 0, 0, 40, 30, 20],
+    "solids": 1,
+    "faces": 6,
+    "edges": 12,
+    "vertices": 8
+  },
+  "R2": {
+    "volume": 58869.02664470767,
+    "bbox": [0, 0, 0, 100, 60, 10],
+    "solids": 1,
+    "faces": 10,
+    "edges": 24,
+    "vertices": 16
+  },
+  "R3": {
+    "volume": 23739.955682586937,
+    "bbox": [0, 0, 0, 40, 30, 20],
+    "solids": 1,
+    "faces": 10,
+    "edges": 20,
+    "vertices": 12,
+    "surfaces": { "plane": 6, "cylinder": 4 }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "facade": "0.1.0",
+  "occt": {
+    "tag": "V8_0_1",
+    "commit": "b8f597c677811d1f9f4d8a97f5ae2825c0353a42",
+    "repository": "https://github.com/Open-Cascade-SAS/OCCT",
+    "toolkits": ["TKPrim", "TKBO", "TKBool", "TKFillet", "TKOffset", "TKFeat", "TKMesh", "TKShHealing", "TKHLR", "TKDESTEP"]
+  },
+  "emsdk": {
+    "version": "6.0.12",
+    "image": "emscripten/emsdk:6.0.12",
+    "digest": "sha256:77638e6c215a65f25a704c0c831d5c2463a8c0468a58c6cb82489dbe621dfa05"
+  },
+  "flags": {
+    "occtCxx": "-fwasm-exceptions -msimd128 -DOCCT_NO_PLUGINS -DIGNORE_NO_ATOMICS=1 -UOCC_CONVERT_SIGNALS",
+    "facadeCxx": "-std=c++17 -O3 -fwasm-exceptions -msimd128",
+    "link": "-lembind -fwasm-exceptions -msimd128 -O3 -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createOcctModule -sENVIRONMENT=web,worker,node -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB -sEXPORTED_RUNTIME_METHODS=HEAPU8 --no-entry --emit-tsd occt-wasm.d.ts"
+  }
+}

@@ -1,0 +1,81 @@
+name: Release
+
+# Publishes a GitHub Release for tags v*. The tag must match package.json.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Check tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build module (Docker)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: dist
+          outputs: type=local,dest=dist
+          cache-from: type=gha,scope=occt-wasm
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:versions
+      - run: node scripts/size-report.mjs --budget-br-mb 4.5 --json dist-sizes.json
+      - run: pnpm test
+
+      # LGPL: ship the complete corresponding source (facade + OCCT) with
+      # every binary release, so users can rebuild and replace the module.
+      - name: Source archive
+        run: scripts/source-archive.sh "occt-wasm-${GITHUB_REF_NAME}-src.tar.gz"
+
+      - name: Checksums
+        run: |
+          cp "occt-wasm-${GITHUB_REF_NAME}-src.tar.gz" dist/
+          cd dist
+          rm -f SHA256SUMS
+          sha256sum * > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            dist/occt-wasm.wasm
+            dist/occt-wasm.mjs
+            dist/index.mjs
+            dist/index.d.ts
+            dist/occt-wasm.generated.d.ts
+            dist/versions.json
+            dist/SHA256SUMS
+            dist/LICENSE
+            dist/OCCT_LGPL_EXCEPTION.txt
+            dist/NOTICE
+            dist/occt-wasm-*-src.tar.gz

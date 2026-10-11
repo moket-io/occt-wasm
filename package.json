@@ -1,0 +1,45 @@
+{
+  "name": "@moket/occt-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open CASCADE Technology 8 compiled to WebAssembly with a thin embind facade for the Moket browser CAD",
+  "license": "LGPL-2.1-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moket-io/occt-wasm.git"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./occt-wasm.wasm": "./dist/occt-wasm.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "build": "scripts/build.sh",
+    "build:local": "scripts/build-local.sh",
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "typecheck": "tsc -p tests/tsconfig.json",
+    "size": "node scripts/size-report.mjs",
+    "check:versions": "node scripts/check-versions.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "@types/node": "24.19.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

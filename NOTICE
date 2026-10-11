@@ -1,0 +1,20 @@
+occt-wasm
+Copyright (C) 2026 Moket contributors
+
+This software uses Open CASCADE Technology (OCCT) version 8.0.1,
+https://dev.opencascade.org, https://github.com/Open-Cascade-SAS/OCCT
+Copyright (c) 1999-2026 OPEN CASCADE SAS.
+
+Open CASCADE Technology is distributed under the GNU Lesser General Public
+License version 2.1 (see LICENSE) with the Open CASCADE exception version 1.0
+(see OCCT_LGPL_EXCEPTION.txt). The facade code in this repository is
+distributed under the same license, LGPL-2.1-only.
+
+The WebAssembly module (occt-wasm.wasm) is a statically linked combination of
+the facade and the OCCT libraries. You may replace it with a module you build
+yourself from the corresponding sources; see README.md, section
+"Rebuilding and replacing the module".
+
+The module also contains the Emscripten runtime and libc++/libc++abi/musl
+system libraries (MIT / University of Illinois NCSA licenses),
+https://github.com/emscripten-core/emscripten.
