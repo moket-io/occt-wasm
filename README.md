@@ -105,6 +105,7 @@ Build times:
 | Facade compile + link, local            | 38 s      |
 | Full Docker build, Docker Desktop VM with 2 CPUs (OCCT stage 19 min 12 s) | 20 min 31 s |
 | Docker rebuild with cached OCCT layer   | 60 s      |
+| CI, cold (GitHub `ubuntu-24.04`, 2 vCPU, OCCT layer not cached) | 93 min |
 
 ## Building
 
@@ -116,7 +117,7 @@ cd occt-wasm
 scripts/build.sh            # docker buildx, writes dist/
 ```
 
-`docker/Dockerfile` has three stages: `occt-libs` (static OCCT, cached as long as the OCCT sources, `scripts/config-occt.sh`, `scripts/build-occt.sh` and the emsdk image digest do not change), `facade` (compile and link) and `dist` (export only). CI and releases use this build.
+`docker/Dockerfile` has three stages: `occt-libs` (static OCCT, cached as long as the OCCT sources, `scripts/config-occt.sh`, `scripts/build-occt.sh` and the emsdk image digest do not change), `facade` (compile and link) and `dist` (export only). CI and releases use this build. The OCCT stage is kept in the GitHub Actions cache; a change to its inputs costs about 90 Actions minutes on the 2 vCPU runner of a private repository, any other change a few minutes.
 
 ### Local
 
@@ -124,7 +125,7 @@ scripts/build.sh            # docker buildx, writes dist/
 scripts/build-local.sh      # installs emsdk 6.0.12 into .cache/ if needed
 ```
 
-Uses an activated emsdk of the pinned version if one is on `PATH`, otherwise installs it into `.cache/emsdk`. OCCT is built once into `.cache/occt-install` and rebuilt only when its inputs change. Local and Docker builds use the same scripts and flags and map source paths with `-ffile-prefix-map`. On macOS the local module is byte-identical to the Docker one except for a single `f64` constant that clang folds with the host math library (1 ulp apart), and the JS glue is identical. Repeated Docker builds are byte-identical. Releases are always built in Docker.
+Uses an activated emsdk of the pinned version if one is on `PATH`, otherwise installs it into `.cache/emsdk`. OCCT is built once into `.cache/occt-install` and rebuilt only when its inputs change. Local and Docker builds use the same scripts and flags and map source paths with `-ffile-prefix-map`. On macOS the local module is byte-identical to the Docker one except for a single `f64` constant that clang folds with the host math library (1 ulp apart), and the JS glue is identical. Docker builds are byte-identical across runs and across host architectures: the module built by CI on linux/amd64 has the same SHA-256 as the one built in Docker Desktop on linux/arm64. Releases are always built in Docker.
 
 ### Tests
 
