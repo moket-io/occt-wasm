@@ -117,7 +117,7 @@ cd occt-wasm
 scripts/build.sh            # docker buildx, writes dist/
 ```
 
-`docker/Dockerfile` has three stages: `occt-libs` (static OCCT, cached as long as the OCCT sources, `scripts/config-occt.sh`, `scripts/build-occt.sh` and the emsdk image digest do not change), `facade` (compile and link) and `dist` (export only). CI and releases use this build. The OCCT stage is kept in the GitHub Actions cache; a change to its inputs costs about 90 Actions minutes on the 2 vCPU runner of a private repository, any other change a few minutes.
+`docker/Dockerfile` has three stages: `occt-libs` (static OCCT, cached as long as the OCCT sources, `scripts/config-occt.sh`, `scripts/build-occt.sh` and the emsdk image digest do not change), `facade` (compile and link) and `dist` (export only). CI and releases use this build. The OCCT stage is kept in the GitHub Actions cache; a change to its inputs took about 90 minutes on the 2 vCPU runner the repository had while it was private (public repositories get 4 vCPU runners), any other change a few minutes.
 
 ### Local
 
