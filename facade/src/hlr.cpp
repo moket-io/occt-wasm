@@ -41,8 +41,9 @@ namespace occtwasm {
 namespace {
 
 // Drawn line kinds, as HLRBRep_HLRToShape numbers them.
-constexpr int kSmooth = 3; // tangent (G1) edges between faces
-constexpr int kSharp  = 5; // sharp edges and silhouettes
+constexpr int kOutline = 2; // silhouettes of curved faces (internal edges)
+constexpr int kSmooth  = 3; // tangent (G1) edges between faces
+constexpr int kSharp   = 5; // sharp edges, and faces seen edge on
 
 struct Context
 {
@@ -254,15 +255,16 @@ void drawFace(Context& c, bool visible, int typ, int iface)
     HLRBRep_EdgeData& edf = c.ds->EDataArray().ChangeValue(ie);
     if (edf.Used())
       continue;
-    const bool todraw = typ == kSmooth
+    const bool todraw = typ == kOutline ? itf.Internal()
+                        : typ == kSmooth
                           ? edf.Rg1Line() && !edf.RgNLine() && !itf.OutLine()
                           : !itf.IsoLine() && !itf.Internal() && (!edf.Rg1Line() || itf.OutLine());
     if (todraw)
     {
-      drawEdge(c, visible, true, typ, edf, ie, face, itf.OutLine());
+      drawEdge(c, visible, true, typ, edf, ie, face, typ == kOutline || itf.OutLine());
       edf.Used(true);
     }
-    else if (typ == kSharp && edf.Rg1Line() && !itf.OutLine())
+    else if ((typ == kSharp || typ == kOutline) && edf.Rg1Line() && !itf.OutLine())
     {
       // A smooth edge may still be a silhouette seen from another face.
       const int hc = edf.HideCount();
@@ -296,6 +298,8 @@ void drawPass(Context& c, int typ, bool visible)
   }
   for (int iface = 1; iface <= c.ds->NbFaces(); ++iface)
     drawFace(c, visible, typ, iface);
+  if (typ == kOutline)
+    return;
   // Edges that belong to no face.
   for (int ie = 1; ie <= ne; ++ie)
   {
@@ -365,14 +369,14 @@ val project(val shapes, val view)
     if (!c.ds.IsNull())
     {
       c.ds->Projector().Scaled(true);
-      drawPass(c, kSharp, true);
-      if (smooth)
-        drawPass(c, kSmooth, true);
-      if (hidden)
+      for (const bool visible : {true, false})
       {
-        drawPass(c, kSharp, false);
+        if (!visible && !hidden)
+          break;
+        drawPass(c, kSharp, visible);
+        drawPass(c, kOutline, visible);
         if (smooth)
-          drawPass(c, kSmooth, false);
+          drawPass(c, kSmooth, visible);
       }
       c.ds->Projector().Scaled(false);
     }
