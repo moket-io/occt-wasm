@@ -68,14 +68,14 @@ describe('project', () => {
   it('keeps circles as circles and draws the holes hidden from the front', () => {
     const { shape } = buildR2(k);
     const top = ok(k.project(shape, TOP));
+    const front = ok(k.project(shape, { ...FRONT, hidden: true }));
     const circles = top.curves.filter((c) => c.type === 'circle');
     expect(circles.length).toBeGreaterThanOrEqual(4);
     for (const c of circles) expect(c.type === 'circle' && c.radius).toBeCloseTo(3, 9);
-    expect(top.curves.some((c) => c.type === 'polyline')).toBe(false);
+    expect(front.curves.some((c) => c.type === 'polyline')).toBe(false); // circles seen edge on are lines
     const outline = top.curves.filter((c) => c.type === 'line');
     expect(total(outline)).toBeCloseTo(2 * (100 + 60), 6);
 
-    const front = ok(k.project(shape, { ...FRONT, hidden: true }));
     const silhouettes = front.curves.filter((c) => !c.visible && c.kind === 'outline');
     // Each hole shows two hidden silhouette lines from its wall; the holes
     // behind each other in this view share them.

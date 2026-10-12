@@ -5,6 +5,9 @@
 //
 // The edge walk follows HLRBRep_HLRToShape (InternalCompound, DrawFace,
 // DrawEdge), which builds compounds and drops where each curve came from.
+// HLR works on a copy of each shape with silhouettes added to its faces
+// (HLRTopoBRep_OutLiner); the copy's data maps its edges back to the edges
+// of the input, and silhouette edges to the input face they lie on.
 //
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
@@ -20,12 +23,15 @@
 #include <HLRBRep_Data.hxx>
 #include <HLRBRep_EdgeData.hxx>
 #include <HLRBRep_FaceIterator.hxx>
+#include <HLRBRep_ShapeBounds.hxx>
+#include <HLRTopoBRep_OutLiner.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -40,24 +46,74 @@ constexpr int kSharp  = 5; // sharp edges and silhouettes
 
 struct Context
 {
-  occ::handle<HLRBRep_Data> ds;
-  std::vector<ShapeMap>     edges; // per input shape
-  std::vector<ShapeMap>     faces;
-  double                    deflection;
-  val                       out;
-  int                       count = 0;
+  occ::handle<HLRBRep_Data>                      ds;
+  std::vector<occ::handle<HLRTopoBRep_OutLiner>> outliners; // per input shape
+  std::vector<ShapeMap>                          edges;
+  std::vector<ShapeMap>                          faces;
+  double                                         deflection;
+  val                                            out;
+  int                                            count = 0;
 };
 
-// The input shape a sub-shape belongs to, and its index there.
-std::pair<int, int> sourceOf(const std::vector<ShapeMap>& maps, const TopoDS_Shape& sub)
+// Where a sub-shape of HLR's copy comes from: an edge of an input shape, or
+// (silhouettes, and faces) a face of it.
+struct Source
 {
-  for (size_t i = 0; i < maps.size(); ++i)
+  int shape = -1;
+  int edge  = -1;
+  int face  = -1;
+};
+
+Source sourceOf(Context& c, const TopoDS_Shape& sub)
+{
+  for (size_t i = 0; i < c.outliners.size(); ++i)
   {
-    const int index = indexOf(maps[i], sub);
-    if (index >= 0)
-      return {static_cast<int>(i), index};
+    const TopoDS_Shape old  = c.outliners[i]->DataStructure().NewSOldS(sub);
+    const int          kind = old.IsNull() ? -1 : old.ShapeType();
+    if (kind == TopAbs_EDGE)
+    {
+      const int e = indexOf(c.edges[i], old);
+      if (e >= 0)
+        return {static_cast<int>(i), e, -1};
+    }
+    else if (kind == TopAbs_FACE)
+    {
+      const int f = indexOf(c.faces[i], old);
+      if (f >= 0)
+        return {static_cast<int>(i), -1, f};
+    }
   }
-  return {-1, -1};
+  return {};
+}
+
+// Points of a polyline that lie on one straight line (a circle seen edge on),
+// as its two extreme points; false when it bends more than tol.
+bool asSegment(const std::vector<gp_Pnt>& pts, double tol, gp_Pnt& a, gp_Pnt& b)
+{
+  if (pts.size() < 2)
+    return false;
+  size_t far = 0;
+  for (size_t i = 1; i < pts.size(); ++i)
+    if (pts[0].SquareDistance(pts[i]) > pts[0].SquareDistance(pts[far]))
+      far = i;
+  const double len = pts[0].Distance(pts[far]);
+  if (len < 1e-12)
+    return false;
+  const gp_Vec dir(pts[0], pts[far]);
+  const gp_Vec u = dir / len;
+  double       lo = 0, hi = 0;
+  for (const gp_Pnt& p : pts)
+  {
+    const gp_Vec v(pts[0], p);
+    if (v.Crossed(u).Magnitude() > tol)
+      return false;
+    const double t = v.Dot(u);
+    lo             = std::min(lo, t);
+    hi             = std::max(hi, t);
+  }
+  a = pts[0].Translated(u * lo);
+  b = pts[0].Translated(u * hi);
+  return true;
 }
 
 val xy(const gp_Pnt& p)
@@ -107,28 +163,34 @@ void emit(Context& c, const TopoDS_Edge& e, bool visible, const char* kind, int 
       break;
     }
     default: {
-      r.set("type", std::string("polyline"));
+      std::vector<gp_Pnt>           pts;
       GCPnts_QuasiUniformDeflection points(curve, c.deflection, t0, t1);
-      val                           pts = val::array();
       if (points.IsDone())
       {
         for (int i = 1; i <= points.NbPoints(); ++i)
-        {
-          const gp_Pnt p = points.Value(i);
-          pts.set(2 * (i - 1), p.X());
-          pts.set(2 * (i - 1) + 1, p.Y());
-        }
+          pts.push_back(points.Value(i));
       }
       else
       {
-        const gp_Pnt a = curve.Value(t0);
-        const gp_Pnt b = curve.Value(t1);
-        pts.set(0, a.X());
-        pts.set(1, a.Y());
-        pts.set(2, b.X());
-        pts.set(3, b.Y());
+        pts.push_back(curve.Value(t0));
+        pts.push_back(curve.Value(t1));
       }
-      r.set("points", pts);
+      gp_Pnt a, b;
+      if (asSegment(pts, c.deflection, a, b))
+      {
+        r.set("type", std::string("line"));
+        r.set("a", xy(a));
+        r.set("b", xy(b));
+        break;
+      }
+      r.set("type", std::string("polyline"));
+      val flat = val::array();
+      for (size_t i = 0; i < pts.size(); ++i)
+      {
+        flat.set(2 * i, pts[i].X());
+        flat.set(2 * i + 1, pts[i].Y());
+      }
+      r.set("points", flat);
       break;
     }
   }
@@ -136,7 +198,7 @@ void emit(Context& c, const TopoDS_Edge& e, bool visible, const char* kind, int 
 }
 
 void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& ed, int ie,
-              std::pair<int, int> face, bool outline)
+              Source face, bool outline)
 {
   bool todraw;
   if (inFace)
@@ -148,12 +210,13 @@ void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& 
   if (!todraw)
     return;
 
-  // Edges HLR adds itself (silhouettes) are beyond the shapes' edge map.
-  const std::pair<int, int> edge = ie <= c.ds->EdgeMap().Extent()
-                                     ? sourceOf(c.edges, c.ds->EdgeMap()(ie))
-                                     : std::pair<int, int>{-1, -1};
-  const int   shape = outline ? face.first : edge.first;
-  const char* kind  = outline ? "outline" : typ == kSmooth ? "smooth" : "sharp";
+  // A real edge stays an edge even where HLR draws it as an outline (a
+  // planar face seen edge on); a silhouette points to its face.
+  Source src = ie <= c.ds->EdgeMap().Extent() ? sourceOf(c, c.ds->EdgeMap()(ie)) : Source{};
+  if (src.edge < 0 && src.face < 0 && outline)
+    src = face;
+  const bool  silhouette = src.edge < 0 && (outline || src.face >= 0);
+  const char* kind = silhouette ? "outline" : typ == kSmooth ? "smooth" : "sharp";
   double      sta, end;
   float       tolsta, tolend;
 
@@ -165,7 +228,7 @@ void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& 
       it.Visible(sta, tolsta, end, tolend);
       const TopoDS_Edge e = HLRBRep::MakeEdge(ed.Geometry(), sta, end);
       if (!e.IsNull())
-        emit(c, e, true, kind, shape, outline ? -1 : edge.second, outline ? face.second : -1);
+        emit(c, e, true, kind, src.shape, src.edge, silhouette ? src.face : -1);
     }
   }
   else
@@ -175,14 +238,14 @@ void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& 
       it.Hidden(sta, tolsta, end, tolend);
       const TopoDS_Edge e = HLRBRep::MakeEdge(ed.Geometry(), sta, end);
       if (!e.IsNull())
-        emit(c, e, false, kind, shape, outline ? -1 : edge.second, outline ? face.second : -1);
+        emit(c, e, false, kind, src.shape, src.edge, silhouette ? src.face : -1);
     }
   }
 }
 
 void drawFace(Context& c, bool visible, int typ, int iface)
 {
-  const std::pair<int, int> face = sourceOf(c.faces, c.ds->FaceMap()(iface));
+  const Source face = sourceOf(c, c.ds->FaceMap()(iface));
 
   HLRBRep_FaceIterator itf;
   for (itf.InitEdge(c.ds->FDataArray().ChangeValue(iface)); itf.MoreEdge(); itf.NextEdge())
@@ -239,7 +302,7 @@ void drawPass(Context& c, int typ, bool visible)
     HLRBRep_EdgeData& ed = c.ds->EDataArray().ChangeValue(ie);
     if (!ed.Used())
     {
-      drawEdge(c, visible, false, typ, ed, ie, {-1, -1}, false);
+      drawEdge(c, visible, false, typ, ed, ie, Source{}, false);
       ed.Used(true);
     }
   }
@@ -291,10 +354,11 @@ val project(val shapes, val view)
 
     Context c;
     c.ds         = algo->DataStructure();
-    for (const TopoDS_Shape& s : inputs)
+    for (size_t i = 0; i < inputs.size(); ++i)
     {
-      c.edges.push_back(mapOf(s, TopAbs_EDGE));
-      c.faces.push_back(mapOf(s, TopAbs_FACE));
+      c.outliners.push_back(algo->ShapeBounds(static_cast<int>(i) + 1).Shape());
+      c.edges.push_back(mapOf(inputs[i], TopAbs_EDGE));
+      c.faces.push_back(mapOf(inputs[i], TopAbs_FACE));
     }
     c.deflection = deflection;
     c.out        = val::array();
