@@ -77,8 +77,8 @@ describe('project', () => {
     expect(total(outline)).toBeCloseTo(2 * (100 + 60), 6);
 
     const silhouettes = front.curves.filter((c) => !c.visible && c.kind === 'outline');
-    // Each hole shows two hidden silhouette lines from its wall; the holes
-    // behind each other in this view share them.
+    // Each hole shows two hidden silhouette lines from its wall (one of them
+    // is the wall's seam); the holes behind each other in this view share them.
     const topo = ok(k.topology(shape));
     const xs = new Set<number>();
     for (const c of silhouettes) {

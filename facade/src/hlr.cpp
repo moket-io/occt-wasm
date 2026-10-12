@@ -25,7 +25,9 @@
 #include <HLRBRep_FaceIterator.hxx>
 #include <HLRBRep_ShapeBounds.hxx>
 #include <HLRTopoBRep_OutLiner.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
 #include <TopoDS_Edge.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
@@ -51,7 +53,9 @@ struct Context
   std::vector<occ::handle<HLRTopoBRep_OutLiner>> outliners; // per input shape
   std::vector<ShapeMap>                          edges;
   std::vector<ShapeMap>                          faces;
-  double                                         deflection;
+  // Per input shape and edge: the face a seam edge closes, -1 for others.
+  std::vector<std::vector<int>> seamFace;
+  double                        deflection;
   val                                            out;
   int                                            count = 0;
 };
@@ -216,6 +220,9 @@ void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& 
   Source src = ie <= c.ds->EdgeMap().Extent() ? sourceOf(c, c.ds->EdgeMap()(ie)) : Source{};
   if (src.edge < 0 && src.face < 0 && outline)
     src = face;
+  // HLR draws a seam only where it lies on the silhouette of its face.
+  if (src.edge >= 0 && c.seamFace[src.shape][src.edge] >= 0)
+    src = {src.shape, -1, c.seamFace[src.shape][src.edge]};
   const bool  silhouette = src.edge < 0 && (outline || src.face >= 0);
   const char* kind = silhouette ? "outline" : typ == kSmooth ? "smooth" : "sharp";
   double      sta, end;
@@ -363,6 +370,15 @@ val project(val shapes, val view)
       c.outliners.push_back(algo->ShapeBounds(static_cast<int>(i) + 1).Shape());
       c.edges.push_back(mapOf(inputs[i], TopAbs_EDGE));
       c.faces.push_back(mapOf(inputs[i], TopAbs_FACE));
+      std::vector<int> seams(c.edges[i].Extent(), -1);
+      for (int f = 1; f <= c.faces[i].Extent(); ++f)
+      {
+        const TopoDS_Face& face = TopoDS::Face(c.faces[i](f));
+        for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next())
+          if (BRep_Tool::IsClosed(TopoDS::Edge(ex.Current()), face))
+            seams[indexOf(c.edges[i], ex.Current())] = f - 1;
+      }
+      c.seamFace.push_back(std::move(seams));
     }
     c.deflection = deflection;
     c.out        = val::array();
