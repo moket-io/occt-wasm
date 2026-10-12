@@ -69,7 +69,9 @@ jobs:
           pnpm exec playwright install --with-deps --only-shell chromium
           pnpm test:browser --project=chromium
 
+      # Also when tests fail, to look at what the module returns.
       - name: Upload dist
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: occt-wasm-dist

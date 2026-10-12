@@ -77,14 +77,18 @@ describe('project', () => {
 
     const front = ok(k.project(shape, { ...FRONT, hidden: true }));
     const silhouettes = front.curves.filter((c) => !c.visible && c.kind === 'outline');
-    // Each hole shows two hidden silhouette lines, 10 mm high, from its wall.
-    expect(silhouettes).toHaveLength(8);
+    // Each hole shows two hidden silhouette lines from its wall; the holes
+    // behind each other in this view share them.
     const topo = ok(k.topology(shape));
+    const xs = new Set<number>();
     for (const c of silhouettes) {
       expect(c.edge).toBe(-1);
       expect(topo.faces[c.face].surface).toBe('cylinder');
-      expect(length(c)).toBeCloseTo(10, 6);
+      if (c.type !== 'line') throw new Error(`silhouette is a ${c.type}`);
+      expect(c.a[0]).toBeCloseTo(c.b[0], 9);
+      xs.add(Math.round(c.a[0] * 1e6) / 1e6);
     }
+    expect([...xs].sort((a, b) => a - b)).toEqual([7, 13, 87, 93]);
   });
 
   it('marks the tangent edges of a fillet as smooth and stays fast', () => {
