@@ -1,7 +1,7 @@
-// Hidden line removal: exact projection of a shape onto a view plane, for
-// 2D drawings. The visible and hidden parts of every edge are returned as 2D
-// curves in view coordinates, each with the index of the edge (or, for
-// silhouettes, the face) of the shape it comes from.
+// Hidden line removal: exact projection of shapes onto a view plane, for 2D
+// drawings. The shapes hide each other. The visible and hidden parts of every
+// edge are returned as 2D curves in view coordinates, each with the shape it
+// comes from and the index of its edge (or, for silhouettes, its face).
 //
 // The edge walk follows HLRBRep_HLRToShape (InternalCompound, DrawFace,
 // DrawEdge), which builds compounds and drops where each curve came from.
@@ -27,6 +27,8 @@
 
 #include <chrono>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 namespace occtwasm {
 
@@ -39,12 +41,24 @@ constexpr int kSharp  = 5; // sharp edges and silhouettes
 struct Context
 {
   occ::handle<HLRBRep_Data> ds;
-  ShapeMap                  edges; // of the input shape
-  ShapeMap                  faces;
+  std::vector<ShapeMap>     edges; // per input shape
+  std::vector<ShapeMap>     faces;
   double                    deflection;
   val                       out;
   int                       count = 0;
 };
+
+// The input shape a sub-shape belongs to, and its index there.
+std::pair<int, int> sourceOf(const std::vector<ShapeMap>& maps, const TopoDS_Shape& sub)
+{
+  for (size_t i = 0; i < maps.size(); ++i)
+  {
+    const int index = indexOf(maps[i], sub);
+    if (index >= 0)
+      return {static_cast<int>(i), index};
+  }
+  return {-1, -1};
+}
 
 val xy(const gp_Pnt& p)
 {
@@ -55,7 +69,8 @@ val xy(const gp_Pnt& p)
 }
 
 // One drawn piece of an edge: an analytic 2D curve or a polyline.
-void emit(Context& c, const TopoDS_Edge& e, bool visible, const char* kind, int edge, int face)
+void emit(Context& c, const TopoDS_Edge& e, bool visible, const char* kind, int shape, int edge,
+          int face)
 {
   BRepAdaptor_Curve curve(e);
   const double      t0 = curve.FirstParameter();
@@ -63,6 +78,7 @@ void emit(Context& c, const TopoDS_Edge& e, bool visible, const char* kind, int 
   val               r  = val::object();
   r.set("visible", visible);
   r.set("kind", std::string(kind));
+  r.set("shape", shape);
   r.set("edge", edge);
   r.set("face", face);
   switch (curve.GetType())
@@ -119,8 +135,8 @@ void emit(Context& c, const TopoDS_Edge& e, bool visible, const char* kind, int 
   c.out.set(c.count++, r);
 }
 
-void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& ed, int ie, int face,
-              bool outline)
+void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& ed, int ie,
+              std::pair<int, int> face, bool outline)
 {
   bool todraw;
   if (inFace)
@@ -132,9 +148,12 @@ void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& 
   if (!todraw)
     return;
 
-  // Edges HLR adds itself (silhouettes) are beyond the shape's edge map.
-  const int   edge = ie <= c.ds->EdgeMap().Extent() ? indexOf(c.edges, c.ds->EdgeMap()(ie)) : -1;
-  const char* kind = outline ? "outline" : typ == kSmooth ? "smooth" : "sharp";
+  // Edges HLR adds itself (silhouettes) are beyond the shapes' edge map.
+  const std::pair<int, int> edge = ie <= c.ds->EdgeMap().Extent()
+                                     ? sourceOf(c.edges, c.ds->EdgeMap()(ie))
+                                     : std::pair<int, int>{-1, -1};
+  const int   shape = outline ? face.first : edge.first;
+  const char* kind  = outline ? "outline" : typ == kSmooth ? "smooth" : "sharp";
   double      sta, end;
   float       tolsta, tolend;
 
@@ -146,7 +165,7 @@ void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& 
       it.Visible(sta, tolsta, end, tolend);
       const TopoDS_Edge e = HLRBRep::MakeEdge(ed.Geometry(), sta, end);
       if (!e.IsNull())
-        emit(c, e, true, kind, edge, outline ? face : -1);
+        emit(c, e, true, kind, shape, outline ? -1 : edge.second, outline ? face.second : -1);
     }
   }
   else
@@ -156,14 +175,14 @@ void drawEdge(Context& c, bool visible, bool inFace, int typ, HLRBRep_EdgeData& 
       it.Hidden(sta, tolsta, end, tolend);
       const TopoDS_Edge e = HLRBRep::MakeEdge(ed.Geometry(), sta, end);
       if (!e.IsNull())
-        emit(c, e, false, kind, edge, outline ? face : -1);
+        emit(c, e, false, kind, shape, outline ? -1 : edge.second, outline ? face.second : -1);
     }
   }
 }
 
 void drawFace(Context& c, bool visible, int typ, int iface)
 {
-  const int face = indexOf(c.faces, c.ds->FaceMap()(iface));
+  const std::pair<int, int> face = sourceOf(c.faces, c.ds->FaceMap()(iface));
 
   HLRBRep_FaceIterator itf;
   for (itf.InitEdge(c.ds->FDataArray().ChangeValue(iface)); itf.MoreEdge(); itf.NextEdge())
@@ -220,7 +239,7 @@ void drawPass(Context& c, int typ, bool visible)
     HLRBRep_EdgeData& ed = c.ds->EDataArray().ChangeValue(ie);
     if (!ed.Used())
     {
-      drawEdge(c, visible, false, typ, ed, ie, -1, false);
+      drawEdge(c, visible, false, typ, ed, ie, {-1, -1}, false);
       ed.Used(true);
     }
   }
@@ -228,11 +247,23 @@ void drawPass(Context& c, int typ, bool visible)
 
 } // namespace
 
-val project(val shape, val view)
+val project(val shapes, val view)
 {
   return guarded([&] {
-    const auto         start = std::chrono::steady_clock::now();
-    const TopoDS_Shape s     = arena().get(toShapeId(shape, "shape"));
+    const auto start = std::chrono::steady_clock::now();
+    // One shape id or an array of them.
+    std::vector<TopoDS_Shape> inputs;
+    if (shapes.isArray())
+    {
+      for (const int id : toInts(shapes, "shapes"))
+        inputs.push_back(arena().get(id));
+    }
+    else
+    {
+      inputs.push_back(arena().get(toShapeId(shapes, "shapes")));
+    }
+    if (inputs.empty())
+      fail("INVALID_ARGUMENT", "shapes must not be empty");
     if (view.isUndefined() || view.isNull())
       fail("INVALID_ARGUMENT", "view is required");
     const gp_Dir dir = toDir(view["direction"], "view.direction");
@@ -252,15 +283,19 @@ val project(val shape, val view)
     const gp_Ax2 frame(gp_Pnt(0, 0, 0), toViewer, right);
 
     occ::handle<HLRBRep_Algo> algo = new HLRBRep_Algo();
-    algo->Add(s);
+    for (const TopoDS_Shape& s : inputs)
+      algo->Add(s);
     algo->Projector(HLRAlgo_Projector(frame));
     algo->Update();
     algo->Hide();
 
     Context c;
     c.ds         = algo->DataStructure();
-    c.edges      = mapOf(s, TopAbs_EDGE);
-    c.faces      = mapOf(s, TopAbs_FACE);
+    for (const TopoDS_Shape& s : inputs)
+    {
+      c.edges.push_back(mapOf(s, TopAbs_EDGE));
+      c.faces.push_back(mapOf(s, TopAbs_FACE));
+    }
     c.deflection = deflection;
     c.out        = val::array();
     if (!c.ds.IsNull())

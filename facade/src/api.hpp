@@ -37,7 +37,7 @@ val check(val shape);
 val distance(val a, val subA, val b, val subB);
 
 // Drawings: hidden line removal.
-val project(val shape, val view);
+val project(val shapes, val view);
 
 // Exchange.
 val exportStep(val shapes);

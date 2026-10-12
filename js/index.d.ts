@@ -305,6 +305,8 @@ interface ProjectedCurveBase {
   visible: boolean;
   /** sharp edge, smooth (tangent) edge, or outline (silhouette of a curved face). */
   kind: 'sharp' | 'smooth' | 'outline';
+  /** Position of the source shape in the shapes passed to project(). */
+  shape: number;
   /** topology() index of the source edge; -1 for outlines. */
   edge: number;
   /** topology() index of the face an outline belongs to; -1 otherwise. */
@@ -392,8 +394,8 @@ export interface OcctKernel {
   check(shape: ShapeId): CheckResult;
   /** Minimum distance between shapes or their sub-shapes (null = the whole shape). */
   distance(a: ShapeId, subA: SubShapeRef | null, b: ShapeId, subB: SubShapeRef | null): DistanceResult;
-  /** Exact hidden line removal (HLRBRep_Algo) onto the view plane. */
-  project(shape: ShapeId, view: ProjectView): ProjectResult;
+  /** Exact hidden line removal (HLRBRep_Algo) onto the view plane; the shapes hide each other. */
+  project(shapes: ShapeId | readonly ShapeId[], view: ProjectView): ProjectResult;
 
   exportStep(shapes: ArrayLike<ShapeId>): BytesResult;
   importStep(bytes: Uint8Array | ArrayBuffer): ShapeResult;

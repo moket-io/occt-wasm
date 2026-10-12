@@ -200,7 +200,7 @@ interface Mesh {
 ## Drawings
 
 ```ts
-project(shape: ShapeId, view: {
+project(shapes: ShapeId | ShapeId[], view: {
   direction: [x, y, z];   // where the viewer looks, e.g. [0, 1, 0] for a front view
   up: [x, y, z];          // up on the drawing
   hidden?: boolean;       // also the hidden parts (default false)
@@ -211,6 +211,7 @@ project(shape: ShapeId, view: {
 type ProjectedCurve = {
   visible: boolean;
   kind: 'sharp' | 'smooth' | 'outline';
+  shape: number;          // position of the source shape in shapes
   edge: number;           // topology() index of the source edge, -1 for outlines
   face: number;           // the face of an outline, -1 otherwise
 } & (
@@ -221,7 +222,7 @@ type ProjectedCurve = {
 );
 ```
 
-`project()` runs `HLRBRep_Algo` with an orthographic projector whose frame has x = up × (towards the viewer), y up and z towards the viewer; 2D coordinates are in that frame, in model units. Each visible or hidden part of an edge is one curve. Lines and circles stay analytic; other curves become polylines within `deflection`. Silhouettes of curved faces are `outline` curves that point to their face. The walk over edges follows `HLRBRep_HLRToShape` (which builds compounds and loses where a curve came from).
+`project()` runs `HLRBRep_Algo` on all the shapes together, so they hide each other, with an orthographic projector whose frame has x = up × (towards the viewer), y up and z towards the viewer; 2D coordinates are in that frame, in model units. Each visible or hidden part of an edge is one curve. Lines and circles stay analytic; other curves become polylines within `deflection`. Silhouettes of curved faces are `outline` curves that point to their face. The walk over edges follows `HLRBRep_HLRToShape` (which builds compounds and loses where a curve came from).
 
 ## Exchange
 

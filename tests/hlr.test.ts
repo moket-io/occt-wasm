@@ -102,6 +102,19 @@ describe('project', () => {
     expect(r.ms).toBeLessThan(1000);
   });
 
+  it('hides one shape behind another and tells them apart', () => {
+    const front = ok(k.makeBox(10, 10, 10)).shape;
+    const back = ok(k.makeBox(30, 30, 30)).shape; // from y = 0 to 30, behind and around
+    const moved = ok(k.transform(back, [1, 0, 0, -10, 0, 1, 0, 20, 0, 0, 1, -10])).shape;
+    const r = ok(k.project([front, moved], { ...FRONT, hidden: true }));
+    const of = (shape: number, visible: boolean) => r.curves.filter((c) => c.shape === shape && c.visible === visible);
+    expect(total(of(0, true))).toBeCloseTo(40, 6); // the small box in front, all visible
+    expect(of(1, true).length).toBeGreaterThan(0);
+    expect(r.curves.every((c) => c.shape === 0 || c.shape === 1)).toBe(true);
+    // A single id still works.
+    expect(ok(k.project(front, FRONT)).curves.every((c) => c.shape === 0)).toBe(true);
+  });
+
   it('refuses a view without a direction or with up along it', () => {
     const { shape } = buildR1(k);
     expect(k.project(shape, { direction: [0, 0, 1], up: [0, 0, 2] })).toMatchObject({
