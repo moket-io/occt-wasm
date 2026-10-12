@@ -197,6 +197,32 @@ interface Mesh {
 
 `mesh()` drops any previous triangulation of the shape and runs `BRepMesh_IncrementalMesh` with the given linear (mm) and angular (radians) deflection. Edge polylines come from the face triangulation, so their points coincide with mesh vertices. A degenerated edge has `count = 0`.
 
+## Drawings
+
+```ts
+project(shape: ShapeId, view: {
+  direction: [x, y, z];   // where the viewer looks, e.g. [0, 1, 0] for a front view
+  up: [x, y, z];          // up on the drawing
+  hidden?: boolean;       // also the hidden parts (default false)
+  smooth?: boolean;       // also smooth (tangent) edges (default false)
+  deflection?: number;    // polylines for other curves, mm (default 0.01)
+}): Result<{ curves: ProjectedCurve[]; xDir: [x, y, z]; ms: number }>;
+
+type ProjectedCurve = {
+  visible: boolean;
+  kind: 'sharp' | 'smooth' | 'outline';
+  edge: number;           // topology() index of the source edge, -1 for outlines
+  face: number;           // the face of an outline, -1 otherwise
+} & (
+  | { type: 'line'; a: [x, y]; b: [x, y] }
+  | { type: 'circle'; center: [x, y]; radius: number }
+  | { type: 'arc'; center: [x, y]; radius: number; a: [x, y]; m: [x, y]; b: [x, y] } // start, between, end
+  | { type: 'polyline'; points: number[] } // x0, y0, x1, y1, ...
+);
+```
+
+`project()` runs `HLRBRep_Algo` with an orthographic projector whose frame has x = up × (towards the viewer), y up and z towards the viewer; 2D coordinates are in that frame, in model units. Each visible or hidden part of an edge is one curve. Lines and circles stay analytic; other curves become polylines within `deflection`. Silhouettes of curved faces are `outline` curves that point to their face. The walk over edges follows `HLRBRep_HLRToShape` (which builds compounds and loses where a curve came from).
+
 ## Exchange
 
 ```ts

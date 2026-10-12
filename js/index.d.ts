@@ -287,6 +287,55 @@ export type DistanceResult = Result<{
   solutions: number;
 }>;
 
+/** A view for hidden line removal. Orthographic. */
+export interface ProjectView {
+  /** Direction the viewer looks in, e.g. [0, 1, 0] for a front view. */
+  direction: Vec3;
+  /** Up on the drawing; must not be parallel to direction. */
+  up: Vec3;
+  /** Also return the hidden parts. Default false. */
+  hidden?: boolean;
+  /** Also return smooth (tangent) edges between faces. Default false. */
+  smooth?: boolean;
+  /** Chordal deviation of polylines for curves other than lines and circles, mm. Default 0.01. */
+  deflection?: number;
+}
+
+interface ProjectedCurveBase {
+  visible: boolean;
+  /** sharp edge, smooth (tangent) edge, or outline (silhouette of a curved face). */
+  kind: 'sharp' | 'smooth' | 'outline';
+  /** topology() index of the source edge; -1 for outlines. */
+  edge: number;
+  /** topology() index of the face an outline belongs to; -1 otherwise. */
+  face: number;
+}
+
+/** View coordinates: x to the right, y up, in model units. */
+export type ProjectedCurve = ProjectedCurveBase &
+  (
+    | { type: 'line'; a: [number, number]; b: [number, number] }
+    | { type: 'circle'; center: [number, number]; radius: number }
+    | {
+        type: 'arc';
+        center: [number, number];
+        radius: number;
+        /** Start, a point in between and end. */
+        a: [number, number];
+        m: [number, number];
+        b: [number, number];
+      }
+    | { type: 'polyline'; points: number[] }
+  );
+
+export type ProjectResult = Result<{
+  curves: ProjectedCurve[];
+  /** The view's x axis in model space (up x towards the viewer). */
+  xDir: [number, number, number];
+  /** Time spent in OCCT, ms. */
+  ms: number;
+}>;
+
 export interface VersionInfo {
   occt: string;
   facade: string;
@@ -343,6 +392,8 @@ export interface OcctKernel {
   check(shape: ShapeId): CheckResult;
   /** Minimum distance between shapes or their sub-shapes (null = the whole shape). */
   distance(a: ShapeId, subA: SubShapeRef | null, b: ShapeId, subB: SubShapeRef | null): DistanceResult;
+  /** Exact hidden line removal (HLRBRep_Algo) onto the view plane. */
+  project(shape: ShapeId, view: ProjectView): ProjectResult;
 
   exportStep(shapes: ArrayLike<ShapeId>): BytesResult;
   importStep(bytes: Uint8Array | ArrayBuffer): ShapeResult;

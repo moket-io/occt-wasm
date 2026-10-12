@@ -36,6 +36,9 @@ val mesh(val shape, val linearDeflection, val angularDeflection);
 val check(val shape);
 val distance(val a, val subA, val b, val subB);
 
+// Drawings: hidden line removal.
+val project(val shape, val view);
+
 // Exchange.
 val exportStep(val shapes);
 val importStep(val bytes);

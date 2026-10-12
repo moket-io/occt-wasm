@@ -22,6 +22,7 @@ const METHODS = [
   'mesh',
   'check',
   'distance',
+  'project',
   'exportStep',
   'importStep',
   'exportBrep',

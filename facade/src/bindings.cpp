@@ -111,6 +111,8 @@ EMSCRIPTEN_BINDINGS(occt_wasm)
   function("check", &check);
   function("distance", &distance);
 
+  function("project", &project);
+
   function("exportStep", &exportStep);
   function("importStep", &importStep);
   function("exportBrep", &exportBrep);
