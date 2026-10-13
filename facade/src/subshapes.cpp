@@ -7,6 +7,8 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepCheck_Shell.hxx>
+#include <BRepCheck_Solid.hxx>
 #include <BRepGProp.hxx>
 #include <BRepGProp_Domain.hxx>
 #include <BRepGProp_Face.hxx>
@@ -15,6 +17,8 @@
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <TopoDS.hxx>
 #include <gp.hxx>
 #include <gp_Circ.hxx>
@@ -240,12 +244,49 @@ bool isValid(const TopoDS_Shape& shape)
     }
     e.valid = true;
   }
-  // Faces are checked with their wires, edges and vertices above; the
-  // topological controls (closed and oriented shells, solids) need the
-  // whole shape.
-  if (!BRepCheck_Analyzer(shape, false).IsValid())
+  // Faces are checked with their wires, edges and vertices above. What
+  // BRepCheck_Analyzer adds for the whole shape: connected shells, closed
+  // and oriented in solids, and the solids' own checks.
+  auto fine = [](const BRepCheck_Result& r) {
+    for (const BRepCheck_Status st : r.Status())
+    {
+      if (st != BRepCheck_NoError)
+      {
+        return false;
+      }
+    }
+    return true;
+  };
+  for (TopExp_Explorer ex(shape, TopAbs_SOLID); ex.More(); ex.Next())
   {
-    return false;
+    const TopoDS_Solid& solid = TopoDS::Solid(ex.Current());
+    if (!fine(BRepCheck_Solid(solid)))
+    {
+      return false;
+    }
+    for (TopoDS_Iterator it(solid); it.More(); it.Next())
+    {
+      if (it.Value().ShapeType() != TopAbs_SHELL)
+      {
+        continue;
+      }
+      BRepCheck_Shell shell(TopoDS::Shell(it.Value()));
+      if (!fine(shell) || shell.Closed() != BRepCheck_NoError)
+      {
+        return false;
+      }
+      if (!shell.IsUnorientable() && shell.Orientation() != BRepCheck_NoError)
+      {
+        return false;
+      }
+    }
+  }
+  for (TopExp_Explorer ex(shape, TopAbs_SHELL, TopAbs_SOLID); ex.More(); ex.Next())
+  {
+    if (!fine(BRepCheck_Shell(TopoDS::Shell(ex.Current()))))
+    {
+      return false;
+    }
   }
   s.validShapes.insert(shape);
   return true;
