@@ -30,20 +30,27 @@ describe('thickSolid (shell)', () => {
     [0, 0, 0, 40, 30, 20].forEach((v, i) => expect(p.bbox[i]).toBeCloseTo(v, 6));
     // 5 outer walls, 5 inner walls and the rim.
     expect(p.faces).toBe(11);
-    expect(shell.history.faces.deleted.map((d) => d.from)).toContain(top);
-    const kept = [0, 1, 2, 3, 4, 5].filter((f) => f !== top);
-    for (const f of kept) {
-      const touched =
-        shell.history.faces.modified.some((m) => m.from === f) ||
-        shell.history.faces.generated.some((g) => g.from === f) ||
-        shell.history.faces.unchanged.some((u) => u.from === f);
-      expect(touched).toBe(true);
+    // The removed face becomes the rim; every kept face stays as the outer
+    // wall and generates its inner wall.
+    const rim = shell.history.faces.modified.find((m) => m.from === top)!.to;
+    expect(rim).toHaveLength(1);
+    expect(ok(k.topology(shell.shape)).faces[rim[0]].area).toBeCloseTo(40 * 30 - 36 * 26, 6);
+    for (const f of [0, 1, 2, 3, 4, 5].filter((f) => f !== top)) {
+      expect(shell.history.faces.unchanged.some((u) => u.from === f)).toBe(true);
+      expect(shell.history.faces.generated.filter((g) => g.from === f && g.kind === 'face')).toHaveLength(1);
     }
   });
 
   it('closes a cavity when no face is removed', () => {
-    const shell = ok(k.thickSolid(buildR1(k).shape, [], -2));
-    expect(relErr(ok(k.properties(shell.shape)).volume, 24000 - 36 * 26 * 16)).toBeLessThan(1e-6);
+    const inside = ok(k.thickSolid(buildR1(k).shape, [], -2));
+    const p = ok(k.properties(inside.shape));
+    expect(p).toMatchObject({ valid: true, solids: 1, shells: 2, faces: 12 });
+    expect(relErr(p.volume, 24000 - 36 * 26 * 16)).toBeLessThan(1e-6);
+    expect(inside.history.faces.modified).toHaveLength(6);
+    // Outside: the part itself is the cavity.
+    const outside = ok(k.properties(ok(k.thickSolid(buildR1(k).shape, [], 1)).shape));
+    const grown = 24000 + 5200 + Math.PI * (40 + 30 + 20) + (4 / 3) * Math.PI;
+    expect(relErr(outside.volume, grown - 24000)).toBeLessThan(1e-6);
   });
 
   it('shells a filleted part thinner than its fillets and fails at or above the radius', () => {
@@ -88,7 +95,9 @@ describe('draft', () => {
     const volume = (20 / 6) * (40 * 30 + (40 - 2 * t) * (30 - 2 * t) + 4 * (40 - t) * (30 - t));
     expect(relErr(p.volume, volume)).toBeLessThan(1e-6);
     expect(p.bbox[0]).toBeCloseTo(0, 6);
-    expect(drafted.history.faces.modified.map((m) => m.from).sort()).toEqual([...sides].sort());
+    // Tapered faces are new faces generated from the sides; top and bottom are trimmed.
+    expect(drafted.history.faces.generated.map((g) => g.from).sort()).toEqual([...sides].sort());
+    expect(drafted.history.faces.modified).toHaveLength(2);
   });
 
   it('names the face that cannot be tapered', () => {
@@ -242,7 +251,7 @@ describe('importStepParts', () => {
     ).bytes;
     const r = ok(k.importStepParts(bytes));
     expect(r).toMatchObject({ solids: 3, open: 0, healed: 0 });
-    expect(r.units).toContain('MILLIMETRE');
+    expect(r.units).toEqual(['millimetre']);
     const byName = Object.fromEntries(r.parts.map((p) => [p.name, p]));
     expect(Object.keys(byName).sort()).toEqual(['Pin Ø4:1', 'Pin Ø4:2', 'Plate:1']);
     expect(byName['Plate:1']).toMatchObject({ type: 'solid', valid: true, product: 'Plate', path: ['Fixture'] });
@@ -260,7 +269,7 @@ describe('importStepParts', () => {
     const mm = /#(\d+)\s*=\s*\(\s*LENGTH_UNIT\(\)\s*NAMED_UNIT\(\*\)\s*SI_UNIT\(\.MILLI\.,\.METRE\.\)\s*\)/.exec(text)!;
     expect(mm).not.toBeNull();
     const inch = text
-      .replace(/GLOBAL_UNIT_ASSIGNED_CONTEXT\(\(#(\d+),/, (s, id) => (id === mm[1] ? s.replace(`#${id}`, '#900001') : s))
+      .replace(/GLOBAL_UNIT_ASSIGNED_CONTEXT\s*\(\(#(\d+),/, (s, id) => (id === mm[1] ? s.replace(`#${id}`, '#900001') : s))
       .replace(
         /ENDSEC;\s*END-ISO-10303-21;/,
         `#900001 = ( CONVERSION_BASED_UNIT('INCH',#900002) LENGTH_UNIT() NAMED_UNIT(#900003) );\n` +
@@ -269,7 +278,7 @@ describe('importStepParts', () => {
       );
     expect(inch).toContain('#900001,');
     const r = ok(k.importStepParts(new TextEncoder().encode(inch)));
-    expect(r.units.join(' ')).toMatch(/INCH/i);
+    expect(r.units).toEqual(['inch']);
     const p = ok(k.properties(r.parts[0].shape));
     expect(relErr(p.volume, 6 * 25.4 ** 3)).toBeLessThan(1e-6);
     expect(p.bbox[5]).toBeCloseTo(76.2, 6);

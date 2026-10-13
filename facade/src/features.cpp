@@ -13,18 +13,19 @@
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffset_Error.hxx>
 #include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GeomFill_Trihedron.hxx>
-#include <NCollection_HSequence.hxx>
 #include <Precision.hxx>
-#include <ShapeAnalysis_FreeBounds.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Solid.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Pln.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <sstream>
@@ -117,81 +118,111 @@ TopoDS_Wire asWire(const TopoDS_Shape& s, const char* name)
 // ---------------------------------------------------------------------------
 TopoDS_Wire connectEdges(const std::vector<TopoDS_Edge>& edges, std::vector<int>& wireEdge, bool& closed)
 {
-  if (edges.empty())
+  const size_t n = edges.size();
+  if (n == 0)
   {
     fail("INVALID_ARGUMENT", "no edges to join");
   }
-  occ::handle<NCollection_HSequence<TopoDS_Shape>> seq = new NCollection_HSequence<TopoDS_Shape>();
-  for (const TopoDS_Edge& e : edges)
+  // End points in the edges' own direction.
+  std::vector<gp_Pnt> first(n), last(n);
+  for (size_t i = 0; i < n; ++i)
   {
-    seq->Append(e);
+    first[i] = BRep_Tool::Pnt(TopExp::FirstVertex(edges[i], true));
+    last[i]  = BRep_Tool::Pnt(TopExp::LastVertex(edges[i], true));
   }
-  occ::handle<NCollection_HSequence<TopoDS_Shape>> wires =
-    ShapeAnalysis_FreeBounds::ConnectEdgesToWires(seq, kJoinTolerance, false);
-  if (wires.IsNull() || wires->Length() == 0)
-  {
-    fail("PATH_NOT_CONNECTED", "the edges do not form a path");
-  }
-  if (wires->Length() > 1)
-  {
-    // Name the smallest gap between the ends of two pieces.
-    double best = std::numeric_limits<double>::max();
-    gp_Pnt at;
-    std::vector<gp_Pnt> ends;
-    for (int i = 1; i <= wires->Length(); ++i)
+  auto touching = [&](const gp_Pnt& p, size_t skip) {
+    std::vector<size_t> out;
+    for (size_t j = 0; j < n; ++j)
     {
-      TopoDS_Vertex v1, v2;
-      TopExp::Vertices(TopoDS::Wire(wires->Value(i)), v1, v2);
-      ends.push_back(BRep_Tool::Pnt(v1));
-      ends.push_back(BRep_Tool::Pnt(v2));
-    }
-    for (size_t a = 0; a < ends.size(); ++a)
-    {
-      for (size_t b = a + 1; b < ends.size(); ++b)
+      if (j != skip && (first[j].Distance(p) <= kJoinTolerance || last[j].Distance(p) <= kJoinTolerance))
       {
-        if (a / 2 != b / 2 && ends[a].Distance(ends[b]) < best)
-        {
-          best = ends[a].Distance(ends[b]);
-          at   = ends[a];
-        }
+        out.push_back(j);
       }
     }
-    fail("PATH_NOT_CONNECTED",
-         "the path has " + std::to_string(wires->Length()) + " pieces; the closest gap is at "
-           + pointText(at));
+    return out;
+  };
+
+  // Start at an open end when there is one, so that an open path is walked
+  // from one end to the other.
+  size_t start    = 0;
+  bool   reversed = false;
+  for (size_t i = 0; i < n; ++i)
+  {
+    if (touching(first[i], i).empty())
+    {
+      start = i;
+      break;
+    }
+    if (touching(last[i], i).empty())
+    {
+      start    = i;
+      reversed = true;
+      break;
+    }
   }
 
-  // Rebuild in path order so that consecutive edges share their vertices.
-  const TopoDS_Wire       ordered = TopoDS::Wire(wires->Value(1));
-  BRepBuilderAPI_MakeWire mw;
-  std::vector<TopoDS_Edge> added(edges.size());
-  for (TopExp_Explorer it(ordered, TopAbs_EDGE); it.More(); it.Next())
+  std::vector<bool>   used(n, false);
+  std::vector<size_t> order{start};
+  std::vector<bool>   flip{reversed};
+  used[start] = true;
+  gp_Pnt end  = reversed ? first[start] : last[start];
+  for (size_t step = 1; step < n; ++step)
   {
-    const TopoDS_Edge& e = TopoDS::Edge(it.Current());
+    std::vector<size_t> next;
+    for (size_t j : touching(end, n))
+    {
+      if (!used[j])
+      {
+        next.push_back(j);
+      }
+    }
+    if (next.size() > 1)
+    {
+      fail("PATH_NOT_CONNECTED", "the path branches at " + pointText(end));
+    }
+    if (next.empty())
+    {
+      // Name the gap between this end and the closest unused edge.
+      double best = std::numeric_limits<double>::max();
+      for (size_t j = 0; j < n; ++j)
+      {
+        if (!used[j])
+        {
+          best = std::min({best, first[j].Distance(end), last[j].Distance(end)});
+        }
+      }
+      fail("PATH_NOT_CONNECTED", "the path has a gap of " + std::to_string(best) + " mm at " + pointText(end));
+    }
+    const size_t j = next[0];
+    used[j]        = true;
+    const bool rev = last[j].Distance(end) <= kJoinTolerance;
+    order.push_back(j);
+    flip.push_back(rev);
+    end = rev ? first[j] : last[j];
+  }
+
+  // Consecutive edges share their vertices in the wire.
+  BRepBuilderAPI_MakeWire  mw;
+  std::vector<TopoDS_Edge> added(n);
+  for (size_t i = 0; i < order.size(); ++i)
+  {
+    const TopoDS_Edge e = flip[i] ? TopoDS::Edge(edges[order[i]].Reversed()) : edges[order[i]];
     mw.Add(e);
     if (!mw.IsDone())
     {
-      fail("PATH_NOT_CONNECTED", "an edge does not connect at " + pointText(BRep_Tool::Pnt(TopExp::FirstVertex(e))));
+      fail("PATH_NOT_CONNECTED", "an edge does not connect at " + pointText(flip[i] ? last[order[i]] : first[order[i]]));
     }
-    for (size_t i = 0; i < edges.size(); ++i)
-    {
-      if (edges[i].IsSame(e))
-      {
-        added[i] = mw.Edge();
-      }
-    }
+    added[order[i]] = mw.Edge();
   }
   TopoDS_Wire    wire = mw.Wire();
   const ShapeMap map  = mapOf(wire, TopAbs_EDGE);
-  wireEdge.assign(edges.size(), -1);
-  for (size_t i = 0; i < edges.size(); ++i)
+  wireEdge.assign(n, -1);
+  for (size_t i = 0; i < n; ++i)
   {
-    if (!added[i].IsNull())
-    {
-      wireEdge[i] = indexOf(map, added[i]);
-    }
+    wireEdge[i] = indexOf(map, added[i]);
   }
-  closed = BRep_Tool::IsClosed(wire);
+  const gp_Pnt begin = flip.front() ? last[order.front()] : first[order.front()];
+  closed             = begin.Distance(end) <= kJoinTolerance;
   wire.Closed(closed);
   return wire;
 }
@@ -263,6 +294,33 @@ val thickSolid(val shape, val faces, val offset, val options)
     for (const TopoDS_Face& f : pickFaces(input, faces, true))
     {
       closing.Append(f);
+    }
+    if (closing.IsEmpty())
+    {
+      // Nothing removed: the offset shell becomes a cavity (inside) or the
+      // new outside (outside) of one solid.
+      BRepOffsetAPI_MakeOffsetShape offset;
+      offset.PerformByJoin(input, d, toTolerance(options), BRepOffset_Skin, false, false, GeomAbs_Arc);
+      if (!offset.IsDone())
+      {
+        fail("SHELL_FAILED",
+             std::string("shell failed (") + offsetErrorName(offset.MakeOffset().Error()) + ")");
+      }
+      const TopoDS_Shape grown = unwrap(offset.Shape());
+      TopExp_Explorer    a(d < 0 ? input : grown, TopAbs_SHELL);
+      TopExp_Explorer    b(d < 0 ? grown : input, TopAbs_SHELL);
+      if (!a.More() || !b.More())
+      {
+        fail("SHELL_FAILED", "shell needs a solid");
+      }
+      TopoDS_Solid solid;
+      BRep_Builder builder;
+      builder.MakeSolid(solid);
+      builder.Add(solid, a.Current());
+      builder.Add(solid, b.Current().Reversed());
+      requireValid(solid, "shell");
+      val history = buildHistory(offset, {input}, solid);
+      return opResult(arena().put(solid), history);
     }
     BRepOffsetAPI_MakeThickSolid algo;
     algo.MakeThickSolidByJoin(input, closing, d, toTolerance(options), BRepOffset_Skin, false,

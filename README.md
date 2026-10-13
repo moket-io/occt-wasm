@@ -7,7 +7,7 @@ The module is distributed under the LGPL 2.1 with the Open CASCADE exception. It
 ## What is inside
 
 - **OCCT 8.0.1** (tag `V8_0_1`, commit `b8f597c677811d1f9f4d8a97f5ae2825c0353a42`), static libraries for modeling, booleans, fillets, offsets, features, meshing, shape healing, hidden line removal and STEP.
-- **Facade** (`facade/`), about 2150 lines of C++ with no product logic: a shape arena addressed by integer handles, construction, extrude/revolve/boolean/fillet/chamfer/transform with full topological history, topology queries with axes of analytic faces and circles, validity checks, minimum distances, hidden line removal for drawings, tessellation, mass properties, STEP (also of assemblies, with XCAF names) and BRep exchange. Every entry point catches all exceptions and returns `{ ok, error?: { code, message }, ... }`.
+- **Facade** (`facade/`), about 3100 lines of C++ with no product logic: a shape arena addressed by integer handles, construction (profiles, wires and paths), extrude/revolve/boolean/fillet/chamfer/transform/shell/offset/draft/sweep/loft with full topological history, topology queries with axes of analytic faces and circles, validity checks, minimum distances, hidden line removal for drawings, tessellation, mass properties, STEP (also of assemblies, with XCAF names and colors, and import part by part with names, colors, units and healing) and BRep exchange. Every entry point catches all exceptions and returns `{ ok, error?: { code, message }, ... }`.
 - **Loader** (`js/`), an ESM `createOcctKernel()` with hand-written TypeScript types.
 
 ## Usage
@@ -46,11 +46,11 @@ Full reference with exact types and semantics: [API.md](API.md). Types: [`js/ind
 | Group        | Calls                                                                                   |
 | ------------ | --------------------------------------------------------------------------------------- |
 | Module       | `version()`, `heapStats()`, `release(id)`, `releaseAll()`                               |
-| Construction | `makeBox`, `makeCylinder`, `makeProfileFace(plane, loops)` (lines, arcs, circles, holes) |
-| Operations   | `extrude`, `revolve`, `boolean('fuse' \| 'cut' \| 'common')`, `fillet`, `chamfer`, `transform` |
+| Construction | `makeBox`, `makeCylinder`, `makeVertex`, `makeProfileFace(plane, loops)` (lines, arcs, circles, holes), `makeWire`, `joinEdges` |
+| Operations   | `extrude`, `revolve`, `boolean('fuse' \| 'cut' \| 'common')`, `fillet`, `chamfer`, `transform`, `thickSolid`, `offsetShape`, `draft`, `sweep`, `loft` |
 | Queries      | `topology`, `properties`, `check`, `distance`, `mesh`                                   |
 | Drawings     | `project` (exact hidden line removal with the source edge of every curve)               |
-| Exchange     | `exportStep`, `importStep`, `exportBrep`, `importBrep`, `exportStepAssembly` (XCAF products and instances) |
+| Exchange     | `exportStep`, `importStep`, `importStepParts` (XCAF, part by part), `exportBrep`, `importBrep`, `exportStepAssembly` (XCAF products and instances) |
 
 Operations return a **history**: for every input sub-shape (face, edge, vertex, by index in `TopExp::MapShapes` order) which result sub-shapes it was modified into, which it generated (with their kind), whether it was deleted, or whether it is present unchanged. Extrude and revolve also report the bottom, top and per-profile-edge side faces, and `makeProfileFace` maps every sketch segment to its edge index. Moket builds topological naming on top of this in TypeScript.
 

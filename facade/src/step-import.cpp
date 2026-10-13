@@ -33,6 +33,7 @@
 #include <XCAFDoc_ShapeTool.hxx>
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <vector>
 
@@ -286,7 +287,10 @@ val importStepParts(val bytes, val options)
     val units = val::array();
     for (int i = 1; i <= lengths.Length(); ++i)
     {
-      units.set(i - 1, std::string(lengths(i).ToCString()));
+      std::string unit = lengths(i).ToCString();
+      std::transform(unit.begin(), unit.end(), unit.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      units.set(i - 1, unit);
     }
     val r = okResult();
     r.set("parts", parts);
