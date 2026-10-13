@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
 #include "common.hpp"
+#include "history.hpp"
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
@@ -195,6 +197,22 @@ struct PlaneFrame
   }
 };
 
+PlaneFrame toFrame(const val& plane)
+{
+  if (plane.isUndefined() || plane.isNull())
+  {
+    fail("INVALID_ARGUMENT", "plane is required");
+  }
+  const gp_Pnt origin = toPnt(plane["origin"], "plane.origin");
+  const gp_Dir normal = toDir(plane["normal"], "plane.normal");
+  const gp_Dir xDir   = toDir(plane["xDir"], "plane.xDir");
+  if (normal.IsParallel(xDir, Precision::Angular()))
+  {
+    fail("INVALID_ARGUMENT", "plane.xDir must not be parallel to plane.normal");
+  }
+  return PlaneFrame{gp_Ax3(origin, normal, xDir)};
+}
+
 // Builds a wire from a closed loop. Consecutive segments share vertices.
 // Returns the wire and the edges in segment order.
 TopoDS_Wire buildWire(const std::vector<Segment>& loop,
@@ -313,21 +331,18 @@ val makeCylinder(val axisOrigin, val axisDir, val radius, val height)
   });
 }
 
+val makeVertex(val point)
+{
+  return guarded([&] {
+    BRepBuilderAPI_MakeVertex mk(toPnt(point, "point"));
+    return shapeResult(arena().put(mk.Vertex()));
+  });
+}
+
 val makeProfileFace(val plane, val loops)
 {
   return guarded([&] {
-    if (plane.isUndefined() || plane.isNull())
-    {
-      fail("INVALID_ARGUMENT", "plane is required");
-    }
-    const gp_Pnt origin = toPnt(plane["origin"], "plane.origin");
-    const gp_Dir normal = toDir(plane["normal"], "plane.normal");
-    const gp_Dir xDir   = toDir(plane["xDir"], "plane.xDir");
-    if (normal.IsParallel(xDir, Precision::Angular()))
-    {
-      fail("INVALID_ARGUMENT", "plane.xDir must not be parallel to plane.normal");
-    }
-    PlaneFrame frame{gp_Ax3(origin, normal, xDir)};
+    const PlaneFrame frame = toFrame(plane);
 
     if (loops.isUndefined() || loops.isNull() || !loops.isArray() || loops["length"].as<int>() < 1)
     {
@@ -396,6 +411,53 @@ val makeProfileFace(val plane, val loops)
 
     val r = shapeResult(arena().put(face));
     r.set("segmentEdges", segmentEdges);
+    return r;
+  });
+}
+
+val makeWire(val plane, val segments)
+{
+  return guarded([&] {
+    const PlaneFrame frame = toFrame(plane);
+    if (segments.isUndefined() || segments.isNull() || !segments.isArray()
+        || segments["length"].as<int>() < 1)
+    {
+      fail("INVALID_ARGUMENT", "segments must be a non-empty array");
+    }
+    const int                n = segments["length"].as<int>();
+    std::vector<TopoDS_Edge> edges;
+    for (int i = 0; i < n; ++i)
+    {
+      const std::string where = "segment " + std::to_string(i);
+      const Segment     s     = parseSegment(segments[i], where);
+      if (s.kind == SegKind::Line)
+      {
+        BRepBuilderAPI_MakeEdge me(frame.to3d(s.a), frame.to3d(s.b));
+        if (!me.IsDone())
+        {
+          fail("INVALID_PROFILE", where + ": cannot build the line");
+        }
+        edges.push_back(me.Edge());
+        continue;
+      }
+      const gp_Dir axis =
+        s.kind == SegKind::Arc && !s.ccw ? frame.ax3.Direction().Reversed() : frame.ax3.Direction();
+      gp_Circ circ(gp_Ax2(frame.to3d(s.center), axis, frame.ax3.XDirection()), s.radius);
+      BRepBuilderAPI_MakeEdge me = s.kind == SegKind::Circle
+                                     ? BRepBuilderAPI_MakeEdge(circ)
+                                     : BRepBuilderAPI_MakeEdge(circ, frame.to3d(s.a), frame.to3d(s.b));
+      if (!me.IsDone())
+      {
+        fail("INVALID_PROFILE", where + ": cannot build the arc");
+      }
+      edges.push_back(me.Edge());
+    }
+    std::vector<int> wireEdge;
+    bool             closed = false;
+    const TopoDS_Wire wire  = connectEdges(edges, wireEdge, closed);
+    val               r     = shapeResult(arena().put(wire));
+    r.set("segmentEdges", intsToJs(wireEdge));
+    r.set("closed", closed);
     return r;
   });
 }

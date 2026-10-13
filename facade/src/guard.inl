@@ -17,7 +17,7 @@ val guarded(F&& body)
   }
   catch (const FacadeError& e)
   {
-    return errorResult(e.code, e.message);
+    return errorResult(e.code, e.message, e.index);
   }
   catch (const Standard_Failure& e)
   {
