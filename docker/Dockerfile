@@ -22,6 +22,10 @@ RUN /work/scripts/build-occt.sh /work/third_party/occt /tmp/occt-build /opt/occt
     && rm -rf /tmp/occt-build
 
 FROM base AS facade
+# Extra link flags, e.g. --profiling-funcs for a module with function names
+# (profiling only, never released).
+ARG FACADE_EXTRA_LINK_FLAGS=""
+ENV FACADE_EXTRA_LINK_FLAGS=${FACADE_EXTRA_LINK_FLAGS}
 COPY --from=occt-libs /opt/occt /opt/occt
 COPY scripts /work/scripts
 COPY facade /work/facade

@@ -7,6 +7,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Also build a module with function names for profiling
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -68,6 +74,26 @@ jobs:
         run: |
           pnpm exec playwright install --with-deps --only-shell chromium
           pnpm test:browser --project=chromium
+
+      # Function names in the wasm make CPU profiles readable; never released.
+      - name: Build module with function names (profiling)
+        if: ${{ inputs.profile }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: dist
+          outputs: type=local,dest=dist-profile
+          build-args: FACADE_EXTRA_LINK_FLAGS=--profiling-funcs
+          cache-from: type=gha,scope=occt-wasm
+
+      - name: Upload profiling build
+        if: ${{ inputs.profile }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: occt-wasm-dist-profile
+          path: dist-profile/
+          retention-days: 3
 
       # Also when tests fail, to look at what the module returns.
       - name: Upload dist
