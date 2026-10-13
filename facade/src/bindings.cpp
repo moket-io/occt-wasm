@@ -117,4 +117,5 @@ EMSCRIPTEN_BINDINGS(occt_wasm)
   function("importStep", &importStep);
   function("exportBrep", &exportBrep);
   function("importBrep", &importBrep);
+  function("exportStepAssembly", &exportStepAssembly);
 }

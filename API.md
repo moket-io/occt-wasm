@@ -231,9 +231,15 @@ exportStep(shapes: ShapeId[]): Result<{ bytes: Uint8Array }>;
 importStep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
 exportBrep(shape: ShapeId): Result<{ bytes: Uint8Array }>;
 importBrep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
+exportStepAssembly(assembly: {
+  name?: string;
+  parts: { name?: string; shapes: ShapeId[] }[];
+  instances: { part: number; name?: string; matrix: number[] }[]; // row-major 3x4
+}): Result<{ bytes: Uint8Array }>;
 ```
 
 - STEP goes through in-memory streams (`STEPControl_Writer::WriteStream`, `STEPControl_Reader::ReadStream`), AP214, millimetres. Several shapes are written as several roots; on import several roots come back as one compound.
+- `exportStepAssembly` builds an XCAF document (`XCAFDoc_ShapeTool`): every part is one product (its shapes as a compound when there are several), every instance a component of the root at a rigid placement, with part and instance names (UTF-8) written as product and occurrence names (`STEPCAFControl_Writer`, name mode on). Readers that ignore the structure, `importStep` included, get every instance in place.
 - `exportBrep` writes the binary BRep format (`BinTools`, without triangulation). `importBrep` reads binary or text BRep. A BRep round trip is exact and keeps the sub-shape order, so it is suitable for caching results with their history indices.
 
 ## Error codes

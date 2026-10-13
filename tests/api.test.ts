@@ -246,6 +246,67 @@ describe('BRep exchange', () => {
   });
 });
 
+describe('STEP assemblies', () => {
+  it('writes parts once and places named instances', () => {
+    const plate = ok(k.makeBox(40, 30, 5)).shape;
+    const pin = ok(k.makeCylinder([0, 0, 0], [0, 0, 1], 2, 10)).shape;
+    const head = ok(k.makeCylinder([0, 0, 10], [0, 0, 1], 3, 2)).shape;
+    const at = (x: number, y: number, z: number) => [1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z];
+    // A quarter turn about Z.
+    const turned = [0, -1, 0, 30, 1, 0, 0, 20, 0, 0, 1, 5];
+    const bytes = ok(
+      k.exportStepAssembly({
+        name: 'Fixture',
+        parts: [
+          { name: 'Plate', shapes: [plate] },
+          { name: 'Pin Ø4', shapes: [pin, head] },
+        ],
+        instances: [
+          { part: 0, name: 'Plate:1', matrix: at(0, 0, 0) },
+          { part: 1, name: 'Pin Ø4:1', matrix: at(10, 10, 5) },
+          { part: 1, name: 'Pin Ø4:2', matrix: turned },
+        ],
+      }),
+    ).bytes;
+    const text = new TextDecoder().decode(bytes);
+    // Two products besides the root, three occurrences, UTF-8 names kept.
+    expect(text.match(/NEXT_ASSEMBLY_USAGE_OCCURRENCE/g)).toHaveLength(3);
+    for (const name of ['Fixture', 'Plate', 'Pin', 'Plate:1', 'Pin', ':2']) expect(text).toContain(name);
+    expect(text.match(/=\s*PRODUCT\(/g)).toHaveLength(3);
+
+    // Readers that ignore the structure get every instance in place.
+    const back = ok(k.importStep(bytes)).shape;
+    const p = ok(k.properties(back));
+    expect(p.solids).toBe(5);
+    const volume = 40 * 30 * 5 + 2 * (Math.PI * 4 * 10 + Math.PI * 9 * 2);
+    expect(relErr(p.volume, volume)).toBeLessThan(1e-6);
+    expect(p.bbox[0]).toBeCloseTo(0, 6);
+    expect(p.bbox[5]).toBeCloseTo(17, 6);
+    expect(p.bbox[3]).toBeCloseTo(40, 6);
+  });
+
+  it('rejects bad assemblies', () => {
+    const box = ok(k.makeBox(1, 1, 1)).shape;
+    const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+    const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? 'OK' : r.error?.code);
+    expect(code(k.exportStepAssembly({ parts: [], instances: [] }))).toBe('INVALID_ARGUMENT');
+    expect(code(k.exportStepAssembly({ parts: [{ shapes: [box] }], instances: [{ part: 1, matrix: I }] }))).toBe(
+      'INVALID_ARGUMENT',
+    );
+    expect(
+      code(
+        k.exportStepAssembly({
+          parts: [{ shapes: [box] }],
+          instances: [{ part: 0, matrix: [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0] }],
+        }),
+      ),
+    ).toBe('INVALID_ARGUMENT');
+    expect(code(k.exportStepAssembly({ parts: [{ shapes: [999999] }], instances: [{ part: 0, matrix: I }] }))).toBe(
+      'INVALID_HANDLE',
+    );
+  });
+});
+
 describe('errors', () => {
   it('fillet radius too large returns ok:false and the module stays usable', () => {
     const { shape } = buildR1(k);

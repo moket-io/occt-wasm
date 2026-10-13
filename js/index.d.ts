@@ -403,6 +403,22 @@ export interface OcctKernel {
   exportBrep(shape: ShapeId): BytesResult;
   /** Binary (BinTools) or text BRep. */
   importBrep(bytes: Uint8Array | ArrayBuffer): ShapeResult;
+  /**
+   * STEP of an assembly through XCAF: one product per part (a compound when
+   * a part has several shapes), placed by named instances under one root.
+   */
+  exportStepAssembly(assembly: StepAssembly): BytesResult;
+}
+
+export interface StepAssembly {
+  /** Name of the root product. */
+  name?: string;
+  parts: ReadonlyArray<{ name?: string; shapes: ArrayLike<ShapeId> }>;
+  /**
+   * `part` indexes `parts`; `matrix` is a row-major 3x4 rigid motion
+   * [r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz].
+   */
+  instances: ReadonlyArray<{ part: number; name?: string; matrix: ArrayLike<number> }>;
 }
 
 export interface OcctKernelOptions {

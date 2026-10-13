@@ -27,6 +27,7 @@ const METHODS = [
   'importStep',
   'exportBrep',
   'importBrep',
+  'exportStepAssembly',
 ];
 
 function errorResult(code, message) {
