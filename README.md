@@ -7,7 +7,7 @@ The module is distributed under the LGPL 2.1 with the Open CASCADE exception. It
 ## What is inside
 
 - **OCCT 8.0.1** (tag `V8_0_1`, commit `b8f597c677811d1f9f4d8a97f5ae2825c0353a42`), static libraries for modeling, booleans, fillets, offsets, features, meshing, shape healing, hidden line removal and STEP.
-- **Facade** (`facade/`), about 2150 lines of C++ with no product logic: a shape arena addressed by integer handles, construction, extrude/revolve/boolean/fillet/chamfer/transform with full topological history, topology queries with axes of analytic faces and circles, validity checks, minimum distances, hidden line removal for drawings, tessellation, mass properties, STEP and BRep exchange. Every entry point catches all exceptions and returns `{ ok, error?: { code, message }, ... }`.
+- **Facade** (`facade/`), about 2150 lines of C++ with no product logic: a shape arena addressed by integer handles, construction, extrude/revolve/boolean/fillet/chamfer/transform with full topological history, topology queries with axes of analytic faces and circles, validity checks, minimum distances, hidden line removal for drawings, tessellation, mass properties, STEP (also of assemblies, with XCAF names) and BRep exchange. Every entry point catches all exceptions and returns `{ ok, error?: { code, message }, ... }`.
 - **Loader** (`js/`), an ESM `createOcctKernel()` with hand-written TypeScript types.
 
 ## Usage
@@ -50,7 +50,7 @@ Full reference with exact types and semantics: [API.md](API.md). Types: [`js/ind
 | Operations   | `extrude`, `revolve`, `boolean('fuse' \| 'cut' \| 'common')`, `fillet`, `chamfer`, `transform` |
 | Queries      | `topology`, `properties`, `check`, `distance`, `mesh`                                   |
 | Drawings     | `project` (exact hidden line removal with the source edge of every curve)               |
-| Exchange     | `exportStep`, `importStep`, `exportBrep`, `importBrep`                                  |
+| Exchange     | `exportStep`, `importStep`, `exportBrep`, `importBrep`, `exportStepAssembly` (XCAF products and instances) |
 
 Operations return a **history**: for every input sub-shape (face, edge, vertex, by index in `TopExp::MapShapes` order) which result sub-shapes it was modified into, which it generated (with their kind), whether it was deleted, or whether it is present unchanged. Extrude and revolve also report the bottom, top and per-profile-edge side faces, and `makeProfileFace` maps every sketch segment to its edge index. Moket builds topological naming on top of this in TypeScript.
 
@@ -60,7 +60,7 @@ Operations return a **history**: for every input sub-shape (face, edge, vertex, 
 | ---------- | -------------------------------------------------------------------------------------- |
 | OCCT       | 8.0.1, `V8_0_1` = `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` (submodule `third_party/occt`) |
 | Emscripten | 6.0.12, image `emscripten/emsdk:6.0.12@sha256:77638e6c215a65f25a704c0c831d5c2463a8c0468a58c6cb82489dbe621dfa05` |
-| Facade     | 0.3.0                                                                                  |
+| Facade     | 0.4.0                                                                                  |
 
 All pins and compiler flags are in [`versions.json`](versions.json) (shipped in `dist/`) and [`scripts/config-occt.sh`](scripts/config-occt.sh) / [`scripts/config.sh`](scripts/config.sh); CI checks that they agree.
 

@@ -45,4 +45,7 @@ val importStep(val bytes);
 val exportBrep(val shape);
 val importBrep(val bytes);
 
+// Assemblies: XCAF products and named instances in one STEP file.
+val exportStepAssembly(val assembly);
+
 } // namespace occtwasm
