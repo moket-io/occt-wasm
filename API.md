@@ -41,7 +41,7 @@ Without options the module resolves `occt-wasm.wasm` next to `occt-wasm.mjs` (`n
 | Call           | Result                                                           |
 | -------------- | ---------------------------------------------------------------- |
 | `version()`    | `{ occt: '8.0.1', facade: '0.5.1', emscripten: '6.0.12' }`       |
-| `heapStats()`  | `{ heapBytes, usedBytes, liveShapes }`                           |
+| `heapStats()`  | `{ heapBytes, usedBytes, liveShapes, cachedSubShapes }`          |
 | `release(id)`  | `Result<{}>`, `INVALID_HANDLE` if the id is unknown or released  |
 | `releaseAll()` | `Result<{ released: number }>`                                   |
 
@@ -106,7 +106,7 @@ loft(sections: ShapeId[], options?: { solid?: boolean; ruled?: boolean }): Resul
 - `extrude`: prism of a face (or wire, edge, shell) along `normalize(dir) * distance`; a negative distance extrudes backwards.
 - `revolve`: revolution about the axis; `|angle|` in (0, 2 pi].
 - `boolean`: `BRepAlgoAPI_Fuse/Cut/Common`. Input `0` is `a`, input `1` is `b`. The result is not simplified (no `UnifySameDomain`), so co-planar faces of a fuse stay split.
-- `fillet`/`chamfer`: constant radius fillet / symmetric chamfer on the given edge indices of `shape` (duplicates ignored). The result is validated with `BRepCheck_Analyzer`; an invalid result is reported as `INVALID_RESULT` instead of being returned.
+- `fillet`/`chamfer`: constant radius fillet / symmetric chamfer on the given edge indices of `shape` (duplicates ignored). The result is validated as `BRepCheck_Analyzer` does (incrementally, see Queries); an invalid result is reported as `INVALID_RESULT` instead of being returned.
 - `transform`: a transformed copy (`BRepBuilderAPI_Transform` with copy). `matrix` is row-major 3x4 `[r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz]`, a rigid motion or a reflection (a scale other than 1 is `INVALID_ARGUMENT`). History maps every face, edge and vertex to its copy (`modified`). Used for patterns and mirrors.
 - `thickSolid`: a shell (`BRepOffsetAPI_MakeThickSolid::MakeThickSolidByJoin`, skin mode, arc joins, no intersection). `faces` are removed (open), the walls get `offset` (negative grows them inside, positive outside), `tolerance` defaults to 1e-3 mm. In the history every kept face stays `unchanged` (the outer wall) and `generated` its inner wall; a removed face is `modified` into the rim. With no face removed the result is one solid with a cavity: two shells, the part's own (`unchanged`) and the offset one (`generated` from the part's faces). Failures are `SHELL_FAILED` with the offset algorithm's error; a wall thicker than a convex fillet's radius fails.
 - `offsetShape`: every face moved by `offset` (`BRepOffsetAPI_MakeOffsetShape`, arc joins), each `generated` from its face; edges and corners grow into rounds outside. Used for shells grown both ways. `OFFSET_FAILED` on failure.
@@ -221,9 +221,11 @@ interface Mesh {
 }
 ```
 
-`check()` runs only `BRepCheck_Analyzer`; use it instead of `properties()` when only validity is needed. `distance()` runs `BRepExtrema_DistShapeShape` between two shapes or sub-shapes (`{ kind: 'face' | 'edge' | 'vertex', index }`, `null` for the whole shape) and returns the first solution's points.
+`check()` answers what `BRepCheck_Analyzer` does; use it instead of `properties()` when only validity is needed.
 
-`mesh()` drops any previous triangulation of the shape and runs `BRepMesh_IncrementalMesh` with the given linear (mm) and angular (radians) deflection. Edge polylines come from the face triangulation, so their points coincide with mesh vertices. A degenerated edge has `count = 0`.
+**Incremental queries (0.6.0).** An operation keeps the faces and edges it does not touch (the same `TShape` and location) in its result, so `topology()`, `properties()`, `check()` and the validation of fillets, chamfers and features compute only the faces and edges they have not seen yet and reuse the rest from a per sub-shape store: face and edge data, face volume and surface properties (summed about the origin, as `BRepGProp` sums them per face), and faces that passed `BRepCheck_Analyzer` with geometric controls (the whole shape still gets the topological controls). Answers equal those for a fresh copy of the shape (a BRep round trip) within 1e-9 relative. Entries are dropped once no live shape holds their sub-shape, and `releaseAll()` clears them; `heapStats().cachedSubShapes` counts them. `distance()` runs `BRepExtrema_DistShapeShape` between two shapes or sub-shapes (`{ kind: 'face' | 'edge' | 'vertex', index }`, `null` for the whole shape) and returns the first solution's points.
+
+`mesh()` runs `BRepMesh_IncrementalMesh` with the given linear (mm) and angular (radians) deflection. Faces keep their triangulation while the deflections stay those of the previous `mesh()` call, so a result meshes only the faces its operation changed; other deflections drop the shape's triangulation first. Edge polylines come from the face triangulation, so their points coincide with mesh vertices. A degenerated edge has `count = 0`.
 
 ## Drawings
 

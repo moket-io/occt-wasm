@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
 #include "common.hpp"
+#include "subshapes.hpp"
 
 #include <emscripten/bind.h>
 #include <emscripten/heap.h>
@@ -41,6 +42,7 @@ val heapStats()
   r.set("heapBytes", static_cast<double>(emscripten_get_heap_size()));
   r.set("usedBytes", static_cast<double>(mi.uordblks));
   r.set("liveShapes", static_cast<double>(arena().size()));
+  r.set("cachedSubShapes", static_cast<double>(cachedSubShapes()));
   return r;
 }
 
@@ -52,6 +54,7 @@ val release(val id)
     {
       fail("INVALID_HANDLE", "Unknown or released shape id " + std::to_string(sid));
     }
+    dropUnusedSubShapes();
     return okResult();
   });
 }
@@ -61,6 +64,7 @@ val releaseAll()
   return guarded([&] {
     val r = okResult();
     r.set("released", static_cast<double>(arena().releaseAll()));
+    clearSubShapes();
     return r;
   });
 }
