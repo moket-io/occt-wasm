@@ -4,7 +4,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/config-occt.sh"
 
 EMSDK_VERSION="6.0.12"
-FACADE_VERSION="0.4.0"
+FACADE_VERSION="0.5.0"
 
 FACADE_CXX_FLAGS="-std=c++17 -O3 -fwasm-exceptions -msimd128"
 

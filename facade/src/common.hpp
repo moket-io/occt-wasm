@@ -31,9 +31,11 @@ struct FacadeError
 {
   std::string code;
   std::string message;
+  int         index = -1; // error.index: the input that failed, when known
 };
 
 [[noreturn]] void fail(const std::string& code, const std::string& message);
+[[noreturn]] void failAt(const std::string& code, const std::string& message, int index);
 
 // ---------------------------------------------------------------------------
 // Shape arena. Ids are positive, never reused within a module instance.
@@ -56,7 +58,7 @@ Arena& arena();
 // ---------------------------------------------------------------------------
 // Results.
 val okResult();
-val errorResult(const std::string& code, const std::string& message);
+val errorResult(const std::string& code, const std::string& message, int index = -1);
 
 // Runs body and converts any exception into an error result.
 template <class F>

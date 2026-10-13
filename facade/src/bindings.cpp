@@ -96,7 +96,10 @@ EMSCRIPTEN_BINDINGS(occt_wasm)
 
   function("makeBox", &makeBox);
   function("makeCylinder", &makeCylinder);
+  function("makeVertex", &makeVertex);
   function("makeProfileFace", &makeProfileFace);
+  function("makeWire", &makeWire);
+  function("joinEdges", &joinEdges);
 
   function("extrude", &extrude);
   function("revolve", &revolve);
@@ -104,6 +107,11 @@ EMSCRIPTEN_BINDINGS(occt_wasm)
   function("fillet", &fillet);
   function("chamfer", &chamfer);
   function("transform", &transform);
+  function("thickSolid", &thickSolid);
+  function("offsetShape", &offsetShape);
+  function("draft", &draft);
+  function("sweep", &sweep);
+  function("loft", &loft);
 
   function("topology", &topology);
   function("properties", &properties);
@@ -115,6 +123,7 @@ EMSCRIPTEN_BINDINGS(occt_wasm)
 
   function("exportStep", &exportStep);
   function("importStep", &importStep);
+  function("importStepParts", &importStepParts);
   function("exportBrep", &exportBrep);
   function("importBrep", &importBrep);
   function("exportStepAssembly", &exportStepAssembly);

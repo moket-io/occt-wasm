@@ -23,6 +23,12 @@ export type ErrorCode =
   | 'FILLET_FAILED'
   | 'CHAMFER_FAILED'
   | 'TRANSFORM_FAILED'
+  | 'SHELL_FAILED'
+  | 'OFFSET_FAILED'
+  | 'DRAFT_FAILED'
+  | 'SWEEP_FAILED'
+  | 'LOFT_FAILED'
+  | 'PATH_NOT_CONNECTED'
   | 'DISTANCE_FAILED'
   | 'MESH_FAILED'
   | 'STEP_READ_FAILED'
@@ -39,6 +45,11 @@ export type ErrorCode =
 export interface KernelError {
   code: ErrorCode;
   message: string;
+  /**
+   * The input that failed, when the call can tell: the face index of a
+   * draft (DRAFT_FAILED), the section of a loft (LOFT_FAILED).
+   */
+  index?: number;
 }
 
 export interface Failure {
@@ -98,6 +109,22 @@ export type ProfileFaceResult = Result<{
    */
   segmentEdges: number[][];
 }>;
+
+/**
+ * Wires joined from edges given in any order and direction; consecutive edges
+ * share their vertices. `closed`: the wire ends where it starts.
+ * makeWire: segmentEdges[i] = edge index of segment i in the wire.
+ */
+export type MakeWireResult = Result<{ shape: ShapeId; closed: boolean; segmentEdges: number[] }>;
+
+/** joinEdges: edges[part][i] = edge index in the wire of the i-th edge taken from parts[part]. */
+export type JoinEdgesResult = Result<{ shape: ShapeId; closed: boolean; edges: number[][] }>;
+
+export interface WirePart {
+  shape: ShapeId;
+  /** topology() edge indices; all edges of the shape when omitted. */
+  edges?: ArrayLike<number>;
+}
 
 // ---------------------------------------------------------------------------
 // History
@@ -162,6 +189,44 @@ export interface SweepInfo {
 
 export type OpResult = Result<{ shape: ShapeId; history: History }>;
 export type SweepResult = Result<{ shape: ShapeId; history: History; sweep: SweepInfo }>;
+
+/** Loft structure, result face indices. */
+export interface LoftInfo {
+  /** Faces closing the first section (empty for a shell or a point). */
+  first: number[];
+  /** Faces closing the last section. */
+  last: number[];
+  /** For every section, the side faces each of its edges generated. */
+  sections: { edge: number; faces: number[] }[][];
+}
+
+export type LoftResult = Result<{ shape: ShapeId; history: History; loft: LoftInfo }>;
+
+export interface OffsetOptions {
+  /** Tolerance of the offset algorithm, mm. Default 1e-3. */
+  tolerance?: number;
+}
+
+export interface SweepOptions {
+  /**
+   * perpendicular: the profile keeps its angle to the path (corrected Frenet).
+   * parallel: the profile keeps its orientation in space. Default perpendicular.
+   */
+  orientation?: 'perpendicular' | 'parallel';
+}
+
+export interface LoftOptions {
+  /** A solid closed by the first and last sections; false gives a shell. Default true. */
+  solid?: boolean;
+  /** Ruled (straight) faces between sections instead of smooth ones. Default false. */
+  ruled?: boolean;
+}
+
+/** A plane through origin with the given normal. */
+export interface NeutralPlane {
+  origin: Vec3;
+  normal: Vec3;
+}
 
 export type BooleanOp = 'fuse' | 'cut' | 'common';
 
@@ -263,6 +328,45 @@ export type MeshResult = Result<{
 }>;
 
 export type BytesResult = Result<{ bytes: Uint8Array }>;
+
+export interface StepImportOptions {
+  /**
+   * Sew open shells and loose faces into solids where they close, and fix
+   * invalid shapes (ShapeFix_Shape). Default true.
+   */
+  heal?: boolean;
+  /** Sewing and healing tolerance, mm. Default 1e-3. */
+  tolerance?: number;
+}
+
+export interface StepPart {
+  shape: ShapeId;
+  /** solid; shell or compound (loose faces) when it does not close. */
+  type: ShapeType;
+  /** BRepCheck_Analyzer verdict. */
+  valid: boolean;
+  /** Sewn into a solid or fixed by healing. */
+  healed: boolean;
+  /** Instance name, or the product name of a shape outside an assembly. */
+  name: string;
+  /** Product (part) name. */
+  product: string;
+  /** Names of the assemblies above it from the root down (instance names, the root's product name). */
+  path: string[];
+  /** sRGB in [0, 1] from the file, when it has one. */
+  color?: [number, number, number];
+}
+
+export type StepPartsResult = Result<{
+  /** One per solid, open shell or set of loose faces, placed, in millimeters. */
+  parts: StepPart[];
+  /** Length units named in the file, e.g. ['MILLIMETRE'] or ['INCH']. */
+  units: string[];
+  solids: number;
+  /** Parts that are not solids. */
+  open: number;
+  healed: number;
+}>;
 
 export type CheckResult = Result<{
   /** BRepCheck_Analyzer verdict. */
@@ -368,7 +472,16 @@ export interface OcctKernel {
 
   makeBox(dx: number, dy: number, dz: number): ShapeResult;
   makeCylinder(axisOrigin: Vec3, axisDir: Vec3, radius: number, height: number): ShapeResult;
+  /** A point, e.g. the tip of a loft. */
+  makeVertex(point: Vec3): ShapeResult;
   makeProfileFace(plane: Plane, loops: readonly Loop[]): ProfileFaceResult;
+  /**
+   * An open or closed wire from sketch segments in any order and direction
+   * (a path for sweep). Fails with PATH_NOT_CONNECTED naming the smallest gap.
+   */
+  makeWire(plane: Plane, segments: readonly Segment[]): MakeWireResult;
+  /** One wire from edges of shapes (bodies, wires), joined end to end. */
+  joinEdges(parts: readonly WirePart[]): JoinEdgesResult;
 
   /** Prism of a face (or wire, edge, shell) along dir * distance. */
   extrude(shape: ShapeId, dir: Vec3, distance: number): SweepResult;
@@ -385,6 +498,33 @@ export interface OcctKernel {
    * sub-shape to its copy.
    */
   transform(shape: ShapeId, matrix: ArrayLike<number>): OpResult;
+  /**
+   * Hollows a solid (BRepOffsetAPI_MakeThickSolid, arc joins): faces are
+   * removed and the walls get the offset (negative = inside). History maps
+   * every kept face to its offset copy and the walls.
+   */
+  thickSolid(shape: ShapeId, faces: ArrayLike<number>, offset: number, options?: OffsetOptions): OpResult;
+  /** Offset of all faces of a solid or shell (positive = outside). */
+  offsetShape(shape: ShapeId, offset: number, options?: OffsetOptions): OpResult;
+  /**
+   * Tapers faces by angle (radians, |angle| in (0, pi/2)) around their
+   * intersection with the neutral plane, for a pull in direction. A face that
+   * cannot be tapered fails with DRAFT_FAILED and error.index.
+   */
+  draft(
+    shape: ShapeId,
+    faces: ArrayLike<number>,
+    direction: Vec3,
+    angle: number,
+    neutral: NeutralPlane,
+  ): OpResult;
+  /** Sweeps a face (solid result) or wire (shell) along a wire or edge. */
+  sweep(profile: ShapeId, spine: ShapeId, options?: SweepOptions): SweepResult;
+  /**
+   * A loft through sections in order: faces without holes (their outer wire),
+   * wires, edges, and a point (vertex) first or last.
+   */
+  loft(sections: ArrayLike<ShapeId>, options?: LoftOptions): LoftResult;
 
   topology(shape: ShapeId): TopologyResult;
   properties(shape: ShapeId): PropertiesResult;
@@ -398,7 +538,10 @@ export interface OcctKernel {
   project(shapes: ShapeId | readonly ShapeId[], view: ProjectView): ProjectResult;
 
   exportStep(shapes: ArrayLike<ShapeId>): BytesResult;
+  /** The whole file as one shape (a compound when it holds several). */
   importStep(bytes: Uint8Array | ArrayBuffer): ShapeResult;
+  /** The file part by part with names, colors and assembly paths (XCAF). */
+  importStepParts(bytes: Uint8Array | ArrayBuffer, options?: StepImportOptions): StepPartsResult;
   /** Binary BRep (BinTools) for caching. */
   exportBrep(shape: ShapeId): BytesResult;
   /** Binary (BinTools) or text BRep. */
@@ -413,7 +556,8 @@ export interface OcctKernel {
 export interface StepAssembly {
   /** Name of the root product. */
   name?: string;
-  parts: ReadonlyArray<{ name?: string; shapes: ArrayLike<ShapeId> }>;
+  /** color: sRGB in [0, 1], written as the surface color of the product. */
+  parts: ReadonlyArray<{ name?: string; shapes: ArrayLike<ShapeId>; color?: Vec3 }>;
   /**
    * `part` indexes `parts`; `matrix` is a row-major 3x4 rigid motion
    * [r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz].

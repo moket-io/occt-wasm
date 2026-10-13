@@ -15,6 +15,8 @@
 #include <TDocStd_Document.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS_Compound.hxx>
+#include <Quantity_Color.hxx>
+#include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
 #include <gp_Trsf.hxx>
@@ -66,7 +68,8 @@ val exportStepAssembly(val assembly)
     }
 
     occ::handle<TDocStd_Document> doc = new TDocStd_Document("MDTV-XCAF");
-    occ::handle<XCAFDoc_ShapeTool> tool = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+    occ::handle<XCAFDoc_ShapeTool> tool   = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+    occ::handle<XCAFDoc_ColorTool> colors = XCAFDoc_DocumentTool::ColorTool(doc->Main());
 
     const TDF_Label root = tool->NewShape();
     setName(root, stringOf(assembly["name"], "name"));
@@ -98,6 +101,11 @@ val exportStepAssembly(val assembly)
       }
       const TDF_Label label = tool->AddShape(shape, false, false);
       setName(label, stringOf(part["name"], "parts[].name"));
+      if (!part["color"].isUndefined() && !part["color"].isNull())
+      {
+        const std::vector<double> c = toDoubles(part["color"], "parts[].color", 3);
+        colors->SetColor(label, Quantity_Color(c[0], c[1], c[2], Quantity_TOC_sRGB), XCAFDoc_ColorSurf);
+      }
       products.push_back(label);
     }
 
@@ -124,6 +132,7 @@ val exportStepAssembly(val assembly)
 
     STEPCAFControl_Writer writer;
     writer.SetNameMode(true);
+    writer.SetColorMode(true);
     if (!writer.Transfer(doc, STEPControl_AsIs))
     {
       fail("STEP_WRITE_FAILED", "cannot transfer the assembly to STEP");

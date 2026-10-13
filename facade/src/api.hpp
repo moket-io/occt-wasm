@@ -19,7 +19,10 @@ val releaseAll();
 // Construction.
 val makeBox(val dx, val dy, val dz);
 val makeCylinder(val axisOrigin, val axisDir, val radius, val height);
+val makeVertex(val point);
 val makeProfileFace(val plane, val loops);
+val makeWire(val plane, val segments);
+val joinEdges(val parts);
 
 // Operations with history.
 val extrude(val shape, val dir, val distance);
@@ -28,6 +31,11 @@ val booleanOp(val op, val a, val b);
 val fillet(val shape, val edges, val radius);
 val chamfer(val shape, val edges, val distance);
 val transform(val shape, val matrix);
+val thickSolid(val shape, val faces, val offset, val options);
+val offsetShape(val shape, val offset, val options);
+val draft(val shape, val faces, val direction, val angle, val neutral);
+val sweep(val profile, val spine, val options);
+val loft(val sections, val options);
 
 // Queries.
 val topology(val shape);
@@ -42,6 +50,7 @@ val project(val shapes, val view);
 // Exchange.
 val exportStep(val shapes);
 val importStep(val bytes);
+val importStepParts(val bytes, val options);
 val exportBrep(val shape);
 val importBrep(val bytes);
 

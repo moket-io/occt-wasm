@@ -14,6 +14,11 @@ void fail(const std::string& code, const std::string& message)
   throw FacadeError{code, message};
 }
 
+void failAt(const std::string& code, const std::string& message, int index)
+{
+  throw FacadeError{code, message, index};
+}
+
 // ---------------------------------------------------------------------------
 ShapeId Arena::put(const TopoDS_Shape& shape)
 {
@@ -62,11 +67,15 @@ val okResult()
   return r;
 }
 
-val errorResult(const std::string& code, const std::string& message)
+val errorResult(const std::string& code, const std::string& message, int index)
 {
   val err = val::object();
   err.set("code", code);
   err.set("message", message);
+  if (index >= 0)
+  {
+    err.set("index", index);
+  }
   val r = val::object();
   r.set("ok", false);
   r.set("error", err);
