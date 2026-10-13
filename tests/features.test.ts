@@ -218,6 +218,19 @@ describe('loft', () => {
     expect(relErr(pyramid.volume, (400 * 30) / 3)).toBeLessThan(1e-6);
   });
 
+  it('lofts from the top face of a body', () => {
+    const { shape } = buildR1(k);
+    const top = ok(k.subShape(shape, 'face', faceAtZ(shape, 20))).shape;
+    expect(ok(k.properties(top)).shapeType).toBe('face');
+    const b = ok(k.makeProfileFace(at(50), [rectLoop(10, 5, 20, 20)])).shape;
+    const p = ok(k.properties(ok(k.loft([top, b], { ruled: true })).shape));
+    expect(p.valid).toBe(true);
+    expect(p.bbox[2]).toBeCloseTo(20, 6);
+    expect(p.bbox[5]).toBeCloseTo(50, 6);
+    expect(code(k.subShape(shape, 'face', 6))).toBe('INVALID_ARGUMENT');
+    expect(code(k.subShape(shape, 'thing' as never, 0))).toBe('INVALID_ARGUMENT');
+  });
+
   it('gives a shell when asked and refuses holes', () => {
     const a = ok(k.makeProfileFace(at(0), [rectLoop(0, 0, 20, 20)])).shape;
     const b = ok(k.makeProfileFace(at(10), [rectLoop(0, 0, 20, 20)])).shape;

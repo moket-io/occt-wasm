@@ -54,11 +54,12 @@ makeBox(dx: number, dy: number, dz: number): Result<{ shape: ShapeId }>;
 makeCylinder(axisOrigin: Vec3, axisDir: Vec3, radius: number, height: number): Result<{ shape: ShapeId }>;
 makeProfileFace(plane: Plane, loops: Loop[]): Result<{ shape: ShapeId; segmentEdges: number[][] }>;
 makeVertex(point: Vec3): Result<{ shape: ShapeId }>;
+subShape(shape: ShapeId, kind: 'solid' | 'shell' | 'face' | 'wire' | 'edge' | 'vertex', index: number): Result<{ shape: ShapeId }>;
 makeWire(plane: Plane, segments: Segment[]): Result<{ shape: ShapeId; closed: boolean; segmentEdges: number[] }>;
 joinEdges(parts: { shape: ShapeId; edges?: number[] }[]): Result<{ shape: ShapeId; closed: boolean; edges: number[][] }>;
 ```
 
-`makeBox` has a corner at the origin. `makeCylinder` starts at `axisOrigin` and extends `height` along `axisDir`. `makeVertex` is a point, for example the tip of a loft.
+`makeBox` has a corner at the origin. `makeCylinder` starts at `axisOrigin` and extends `height` along `axisDir`. `makeVertex` is a point, for example the tip of a loft. `subShape` puts a sub-shape of a shape into the arena as a shape of its own, by its index in `TopExp::MapShapes` order of that kind (the `topology()` index for faces, edges and vertices), for example a planar face of a body as a loft section.
 
 ### Wires (makeWire, joinEdges)
 

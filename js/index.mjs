@@ -11,6 +11,7 @@ const METHODS = [
   'makeBox',
   'makeCylinder',
   'makeVertex',
+  'subShape',
   'makeProfileFace',
   'makeWire',
   'joinEdges',

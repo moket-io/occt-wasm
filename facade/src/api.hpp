@@ -20,6 +20,7 @@ val releaseAll();
 val makeBox(val dx, val dy, val dz);
 val makeCylinder(val axisOrigin, val axisDir, val radius, val height);
 val makeVertex(val point);
+val subShape(val shape, val kind, val index);
 val makeProfileFace(val plane, val loops);
 val makeWire(val plane, val segments);
 val joinEdges(val parts);
