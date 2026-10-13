@@ -19,6 +19,8 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS_Iterator.hxx>
+#include <TopoDS_Shell.hxx>
+#include <TopoDS_Solid.hxx>
 #include <TopoDS.hxx>
 #include <gp.hxx>
 #include <gp_Circ.hxx>
