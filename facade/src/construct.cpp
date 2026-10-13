@@ -339,6 +339,34 @@ val makeVertex(val point)
   });
 }
 
+val subShape(val shape, val kind, val index)
+{
+  return guarded([&] {
+    const TopoDS_Shape& s = arena().get(toShapeId(shape, "shape"));
+    if (!kind.isString())
+    {
+      fail("INVALID_ARGUMENT", "kind must be a string");
+    }
+    const std::string k = kind.as<std::string>();
+    TopAbs_ShapeEnum  type;
+    if (k == "solid") type = TopAbs_SOLID;
+    else if (k == "shell") type = TopAbs_SHELL;
+    else if (k == "face") type = TopAbs_FACE;
+    else if (k == "wire") type = TopAbs_WIRE;
+    else if (k == "edge") type = TopAbs_EDGE;
+    else if (k == "vertex") type = TopAbs_VERTEX;
+    else fail("INVALID_ARGUMENT", "kind must be solid, shell, face, wire, edge or vertex");
+    const ShapeMap map = mapOf(s, type);
+    const int      i   = toInt(index, "index");
+    if (i < 0 || i >= map.Extent())
+    {
+      fail("INVALID_ARGUMENT",
+           k + " index " + std::to_string(i) + " out of range [0, " + std::to_string(map.Extent()) + ")");
+    }
+    return shapeResult(arena().put(map(i + 1)));
+  });
+}
+
 val makeProfileFace(val plane, val loops)
 {
   return guarded([&] {

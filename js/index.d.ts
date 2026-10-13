@@ -474,6 +474,12 @@ export interface OcctKernel {
   makeCylinder(axisOrigin: Vec3, axisDir: Vec3, radius: number, height: number): ShapeResult;
   /** A point, e.g. the tip of a loft. */
   makeVertex(point: Vec3): ShapeResult;
+  /**
+   * A sub-shape as a shape of its own (same TopoDS shape, located), by its
+   * topology() index for faces, edges and vertices; e.g. a planar face of a
+   * body as a loft section.
+   */
+  subShape(shape: ShapeId, kind: 'solid' | 'shell' | 'face' | 'wire' | 'edge' | 'vertex', index: number): ShapeResult;
   makeProfileFace(plane: Plane, loops: readonly Loop[]): ProfileFaceResult;
   /**
    * An open or closed wire from sketch segments in any order and direction
