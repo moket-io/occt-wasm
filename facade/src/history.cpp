@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "history.hpp"
 
-#include <BRepCheck_Analyzer.hxx>
+#include "subshapes.hpp"
+
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 
@@ -37,14 +38,6 @@ int kindIndex(TopAbs_ShapeEnum type)
   return -1;
 }
 
-val entry(int input, int from)
-{
-  val e = val::object();
-  e.set("input", input);
-  e.set("from", from);
-  return e;
-}
-
 } // namespace
 
 void pushUnique(std::vector<int>& v, int x)
@@ -57,6 +50,12 @@ void pushUnique(std::vector<int>& v, int x)
 
 // Builds the history object for an algorithm. Indices are 0-based positions in
 // TopExp::MapShapes order of the input shape (from) and of the result (to).
+// Lists are packed into Int32Arrays (every sub-shape of a large input is at
+// least in `unchanged`) and unpacked into objects by the JS loader:
+//   modified  [input, from, n, to * n]...
+//   generated [input, from, kind, n, to * n]...
+//   deleted   [input, from]...
+//   unchanged [input, from, to]...
 val buildHistory(BRepBuilderAPI_MakeShape&        algo,
                  const std::vector<TopoDS_Shape>& inputs,
                  const TopoDS_Shape&              result)
@@ -68,17 +67,19 @@ val buildHistory(BRepBuilderAPI_MakeShape&        algo,
   }
 
   val history = val::object();
+  history.set("packed", true);
   for (int k = 0; k < 3; ++k)
   {
-    val modified  = val::array();
-    val generated = val::array();
-    val deleted   = val::array();
-    val unchanged = val::array();
-    int nMod = 0, nGen = 0, nDel = 0, nSame = 0;
+    std::vector<int32_t> modified, generated, deleted, unchanged;
+    auto                 list = [](std::vector<int32_t>& out, const std::vector<int>& to) {
+      out.push_back(static_cast<int32_t>(to.size()));
+      out.insert(out.end(), to.begin(), to.end());
+    };
 
     for (size_t i = 0; i < inputs.size(); ++i)
     {
-      const ShapeMap in = mapOf(inputs[i], kKinds[k].type);
+      const int      input = static_cast<int>(i);
+      const ShapeMap in    = mapOf(inputs[i], kKinds[k].type);
       for (int j = 1; j <= in.Extent(); ++j)
       {
         const TopoDS_Shape& s    = in(j);
@@ -87,9 +88,7 @@ val buildHistory(BRepBuilderAPI_MakeShape&        algo,
         const int same = indexOf(res[k], s);
         if (same >= 0)
         {
-          val e = entry(static_cast<int>(i), from);
-          e.set("to", same);
-          unchanged.set(nSame++, e);
+          unchanged.insert(unchanged.end(), {input, from, same});
         }
 
         // Individual queries may throw for some algorithms and sub-shape
@@ -106,9 +105,8 @@ val buildHistory(BRepBuilderAPI_MakeShape&        algo,
           }
           if (!to.empty())
           {
-            val e = entry(static_cast<int>(i), from);
-            e.set("to", intsToJs(to));
-            modified.set(nMod++, e);
+            modified.insert(modified.end(), {input, from});
+            list(modified, to);
           }
         }
         catch (...)
@@ -130,10 +128,8 @@ val buildHistory(BRepBuilderAPI_MakeShape&        algo,
           {
             if (!to[kk].empty())
             {
-              val e = entry(static_cast<int>(i), from);
-              e.set("kind", kKinds[kk].name);
-              e.set("to", intsToJs(to[kk]));
-              generated.set(nGen++, e);
+              generated.insert(generated.end(), {input, from, kk});
+              list(generated, to[kk]);
             }
           }
         }
@@ -145,7 +141,7 @@ val buildHistory(BRepBuilderAPI_MakeShape&        algo,
         {
           if (algo.IsDeleted(s))
           {
-            deleted.set(nDel++, entry(static_cast<int>(i), from));
+            deleted.insert(deleted.end(), {input, from});
           }
         }
         catch (...)
@@ -155,10 +151,10 @@ val buildHistory(BRepBuilderAPI_MakeShape&        algo,
     }
 
     val kh = val::object();
-    kh.set("modified", modified);
-    kh.set("generated", generated);
-    kh.set("deleted", deleted);
-    kh.set("unchanged", unchanged);
+    kh.set("modified", int32ToJs(modified));
+    kh.set("generated", int32ToJs(generated));
+    kh.set("deleted", int32ToJs(deleted));
+    kh.set("unchanged", int32ToJs(unchanged));
     history.set(kKinds[k].key, kh);
   }
   return history;
@@ -259,7 +255,7 @@ TopoDS_Shape unwrap(const TopoDS_Shape& shape)
 
 void requireValid(const TopoDS_Shape& result, const char* what)
 {
-  if (!BRepCheck_Analyzer(result).IsValid())
+  if (!isValid(result))
   {
     fail("INVALID_RESULT", std::string(what) + " produced an invalid shape");
   }

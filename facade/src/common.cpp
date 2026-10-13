@@ -246,6 +246,16 @@ val uint32ToJs(const std::vector<uint32_t>& v)
   return typedCopy("Uint32Array", v.data(), v.size());
 }
 
+val float64ToJs(const std::vector<double>& v)
+{
+  return typedCopy("Float64Array", v.data(), v.size());
+}
+
+val int32ToJs(const std::vector<int32_t>& v)
+{
+  return typedCopy("Int32Array", v.data(), v.size());
+}
+
 // ---------------------------------------------------------------------------
 ShapeMap mapOf(const TopoDS_Shape& shape, TopAbs_ShapeEnum kind)
 {

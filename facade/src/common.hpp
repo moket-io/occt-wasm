@@ -82,6 +82,8 @@ val intsToJs(const std::vector<int>& v);
 val bytesToJs(const std::string& bytes);
 val float32ToJs(const std::vector<float>& v);
 val uint32ToJs(const std::vector<uint32_t>& v);
+val float64ToJs(const std::vector<double>& v);
+val int32ToJs(const std::vector<int32_t>& v);
 
 // 0-based index of sub-shape in the map, -1 if absent.
 inline int indexOf(const ShapeMap& map, const TopoDS_Shape& s)

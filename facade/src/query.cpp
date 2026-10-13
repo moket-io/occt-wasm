@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
 #include "common.hpp"
+#include "subshapes.hpp"
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
-#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepLProp_SLProps.hxx>
 #include <BRepLib_ToolTriangulatedShape.hxx>
@@ -24,7 +24,9 @@
 #include <Poly_PolygonOnTriangulation.hxx>
 #include <Poly_Triangulation.hxx>
 #include <TopExp.hxx>
+#include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Cone.hxx>
@@ -32,6 +34,7 @@
 #include <gp_Sphere.hxx>
 #include <gp_Torus.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -64,99 +67,43 @@ val bboxToJs(const Bnd_Box& box)
   return a;
 }
 
-Bnd_Box optimalBox(const TopoDS_Shape& s)
-{
-  Bnd_Box box;
-  BRepBndLib::AddOptimal(s, box, false, false);
-  return box;
-}
-
-const char* surfaceName(GeomAbs_SurfaceType t)
+// Codes of the names in SURFACES and CURVES of index.mjs.
+double surfaceCode(GeomAbs_SurfaceType t)
 {
   switch (t)
   {
-    case GeomAbs_Plane:         return "plane";
-    case GeomAbs_Cylinder:      return "cylinder";
-    case GeomAbs_Cone:          return "cone";
-    case GeomAbs_Sphere:        return "sphere";
-    case GeomAbs_Torus:         return "torus";
+    case GeomAbs_Plane:          return 0; // plane
+    case GeomAbs_Cylinder:       return 1; // cylinder
+    case GeomAbs_Cone:           return 2; // cone
+    case GeomAbs_Sphere:         return 3; // sphere
+    case GeomAbs_Torus:          return 4; // torus
     case GeomAbs_BezierSurface:
-    case GeomAbs_BSplineSurface: return "bspline";
-    default:                    return "other";
+    case GeomAbs_BSplineSurface: return 5; // bspline
+    default:                     return 6; // other
   }
 }
 
-const char* curveName(GeomAbs_CurveType t)
+double curveCode(GeomAbs_CurveType t)
 {
   switch (t)
   {
-    case GeomAbs_Line:        return "line";
-    case GeomAbs_Circle:      return "circle";
-    case GeomAbs_Ellipse:     return "ellipse";
+    case GeomAbs_Line:         return 0; // line
+    case GeomAbs_Circle:       return 1; // circle
+    case GeomAbs_Ellipse:      return 2; // ellipse
     case GeomAbs_BezierCurve:
-    case GeomAbs_BSplineCurve: return "bspline";
-    default:                  return "other";
+    case GeomAbs_BSplineCurve: return 3; // bspline
+    default:                   return 4; // other
   }
 }
 
-// Outward normal at the middle of the face parameter range.
-gp_Dir faceNormal(const TopoDS_Face& face, const BRepAdaptor_Surface& surf)
+void pushBox(std::vector<double>& v, const Bnd_Box& box)
 {
-  double u0, u1, v0, v1;
-  BRepTools::UVBounds(face, u0, u1, v0, v1);
-  BRepLProp_SLProps props(surf, (u0 + u1) / 2, (v0 + v1) / 2, 1, 1e-7);
-  gp_Dir            n(0, 0, 1);
-  if (props.IsNormalDefined())
+  double b[6] = {0, 0, 0, 0, 0, 0};
+  if (!box.IsVoid())
   {
-    n = props.Normal();
+    box.Get(b[0], b[1], b[2], b[3], b[4], b[5]);
   }
-  if (face.Orientation() == TopAbs_REVERSED)
-  {
-    n.Reverse();
-  }
-  return n;
-}
-
-val axisToJs(const gp_Ax1& ax)
-{
-  val a = val::object();
-  a.set("origin", pntToJs(ax.Location()));
-  a.set("dir", dirToJs(ax.Direction()));
-  return a;
-}
-
-// Axis and radius of analytic faces, for picking hole axes and measuring.
-void setSurfaceAxis(val& f, const BRepAdaptor_Surface& surf)
-{
-  switch (surf.GetType())
-  {
-    case GeomAbs_Cylinder: {
-      const gp_Cylinder c = surf.Cylinder();
-      f.set("axis", axisToJs(c.Axis()));
-      f.set("radius", c.Radius());
-      break;
-    }
-    case GeomAbs_Cone: {
-      const gp_Cone c = surf.Cone();
-      f.set("axis", axisToJs(c.Axis()));
-      f.set("radius", c.RefRadius());
-      break;
-    }
-    case GeomAbs_Sphere: {
-      const gp_Sphere c = surf.Sphere();
-      f.set("axis", axisToJs(gp_Ax1(c.Location(), c.Position().Direction())));
-      f.set("radius", c.Radius());
-      break;
-    }
-    case GeomAbs_Torus: {
-      const gp_Torus c = surf.Torus();
-      f.set("axis", axisToJs(c.Axis()));
-      f.set("radius", c.MajorRadius());
-      break;
-    }
-    default:
-      break;
-  }
+  v.insert(v.end(), b, b + 6);
 }
 
 // Sub-shape by { kind, index }, or the whole shape when sub is null/undefined.
@@ -200,6 +147,10 @@ TopoDS_Shape subShape(const TopoDS_Shape& shape, const val& sub, const char* nam
 } // namespace
 
 // ---------------------------------------------------------------------------
+// Packed for speed, unpacked into objects by the JS loader (index.mjs):
+// faces 23 numbers each, edges 20 plus their faces in packedEdgeFaces
+// (count, then indices), vertices 3. Per face and edge data comes from the sub-shape
+// store, so a result only computes the faces and edges an operation changed.
 val topology(val shapeArg)
 {
   return guarded([&] {
@@ -208,89 +159,84 @@ val topology(val shapeArg)
     const ShapeMap      edges = mapOf(shape, TopAbs_EDGE);
     const ShapeMap      verts = mapOf(shape, TopAbs_VERTEX);
 
-    val jsFaces = val::array();
+    auto pushPnt = [](std::vector<double>& v, const gp_XYZ& p) {
+      v.push_back(p.X());
+      v.push_back(p.Y());
+      v.push_back(p.Z());
+    };
+    auto pushAxis = [&](std::vector<double>& v, bool has, const gp_Ax1& ax, double radius) {
+      v.push_back(has ? 1 : 0);
+      pushPnt(v, ax.Location().XYZ());
+      pushPnt(v, ax.Direction().XYZ());
+      v.push_back(radius);
+    };
+
+    // surface, area, centroid 3, normal 3, bbox 6, reversed, axis 8
+    std::vector<double> faceOut;
+    faceOut.reserve(static_cast<size_t>(faces.Extent()) * 23);
     for (int i = 1; i <= faces.Extent(); ++i)
     {
-      const TopoDS_Face   face = TopoDS::Face(faces(i));
-      BRepAdaptor_Surface surf(face);
-      GProp_GProps        props;
-      BRepGProp::SurfaceProperties(face, props);
-
-      val f = val::object();
-      f.set("index", i - 1);
-      f.set("surface", std::string(surfaceName(surf.GetType())));
-      f.set("area", props.Mass());
-      f.set("centroid", pntToJs(props.CentreOfMass()));
-      f.set("normal", dirToJs(faceNormal(face, surf)));
-      f.set("bbox", bboxToJs(optimalBox(face)));
-      f.set("reversed", face.Orientation() == TopAbs_REVERSED);
-      setSurfaceAxis(f, surf);
-      jsFaces.set(i - 1, f);
+      const TopoDS_Face face = TopoDS::Face(faces(i));
+      const FaceData&   d    = faceData(face);
+      const bool        rev  = face.Orientation() == TopAbs_REVERSED;
+      faceOut.push_back(surfaceCode(static_cast<GeomAbs_SurfaceType>(d.surface)));
+      faceOut.push_back(d.area.Mass());
+      pushPnt(faceOut, d.area.CentreOfMass().XYZ());
+      pushPnt(faceOut, rev ? d.normal.Reversed().XYZ() : d.normal.XYZ());
+      pushBox(faceOut, d.box);
+      faceOut.push_back(rev ? 1 : 0);
+      pushAxis(faceOut, d.hasAxis, d.axis, d.radius);
     }
 
     AncestorMap edgeFaces;
     TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edgeFaces);
 
-    val jsEdges = val::array();
+    // degenerated, curve, length, midpoint 3, start 3, end 3, circle 8
+    std::vector<double>  edgeOut;
+    std::vector<int32_t> adjacent;
+    edgeOut.reserve(static_cast<size_t>(edges.Extent()) * 20);
+    adjacent.reserve(static_cast<size_t>(edges.Extent()) * 3);
     for (int i = 1; i <= edges.Extent(); ++i)
     {
       const TopoDS_Edge edge = TopoDS::Edge(edges(i));
-      val               e    = val::object();
-      e.set("index", i - 1);
-      const bool degenerated = BRep_Tool::Degenerated(edge);
-      e.set("degenerated", degenerated);
-      if (degenerated)
-      {
-        e.set("curve", std::string("other"));
-        e.set("length", 0.0);
-        e.set("midpoint", pntToJs(BRep_Tool::Pnt(TopExp::FirstVertex(edge))));
-      }
-      else
-      {
-        BRepAdaptor_Curve curve(edge);
-        GProp_GProps      props;
-        BRepGProp::LinearProperties(edge, props);
-        e.set("curve", std::string(curveName(curve.GetType())));
-        e.set("length", props.Mass());
-        e.set("midpoint", pntToJs(curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2)));
-        e.set("start", pntToJs(curve.Value(curve.FirstParameter())));
-        e.set("end", pntToJs(curve.Value(curve.LastParameter())));
-        if (curve.GetType() == GeomAbs_Circle)
-        {
-          const gp_Circ c = curve.Circle();
-          e.set("axis", axisToJs(c.Axis()));
-          e.set("radius", c.Radius());
-        }
-      }
-      std::vector<int> adj;
+      const EdgeData&   d    = edgeData(edge);
+      edgeOut.push_back(d.degenerated ? 1 : 0);
+      edgeOut.push_back(curveCode(static_cast<GeomAbs_CurveType>(d.curve)));
+      edgeOut.push_back(d.length);
+      pushPnt(edgeOut, d.midpoint.XYZ());
+      pushPnt(edgeOut, d.start.XYZ());
+      pushPnt(edgeOut, d.end.XYZ());
+      pushAxis(edgeOut, d.circle, d.axis, d.radius);
+      // Faces of each edge: count, then indices.
+      const size_t at = adjacent.size();
+      adjacent.push_back(0);
       if (const NCollection_List<TopoDS_Shape>* anc = edgeFaces.Seek(edge))
       {
         for (NCollection_List<TopoDS_Shape>::Iterator it(*anc); it.More(); it.Next())
         {
           const int idx = indexOf(faces, it.Value());
-          if (idx >= 0)
+          if (idx >= 0
+              && std::find(adjacent.begin() + at + 1, adjacent.end(), idx) == adjacent.end())
           {
-            adj.push_back(idx);
+            adjacent.push_back(idx);
           }
         }
       }
-      e.set("faces", intsToJs(adj));
-      jsEdges.set(i - 1, e);
+      adjacent[at] = static_cast<int32_t>(adjacent.size() - at - 1);
     }
 
-    val jsVerts = val::array();
+    std::vector<double> vertOut;
+    vertOut.reserve(static_cast<size_t>(verts.Extent()) * 3);
     for (int i = 1; i <= verts.Extent(); ++i)
     {
-      val v = val::object();
-      v.set("index", i - 1);
-      v.set("point", pntToJs(BRep_Tool::Pnt(TopoDS::Vertex(verts(i)))));
-      jsVerts.set(i - 1, v);
+      pushPnt(vertOut, BRep_Tool::Pnt(TopoDS::Vertex(verts(i))).XYZ());
     }
 
     val r = okResult();
-    r.set("faces", jsFaces);
-    r.set("edges", jsEdges);
-    r.set("vertices", jsVerts);
+    r.set("packedFaces", float64ToJs(faceOut));
+    r.set("packedEdges", float64ToJs(edgeOut));
+    r.set("packedEdgeFaces", int32ToJs(adjacent));
+    r.set("packedVertices", float64ToJs(vertOut));
     return r;
   });
 }
@@ -301,10 +247,34 @@ val properties(val shapeArg)
   return guarded([&] {
     const TopoDS_Shape& shape = arena().get(toShapeId(shapeArg, "shape"));
 
-    GProp_GProps vol;
-    BRepGProp::VolumeProperties(shape, vol);
-    GProp_GProps surf;
-    BRepGProp::SurfaceProperties(shape, surf);
+    // Sums of the faces' contributions, as BRepGProp does, from the store.
+    GProp_GProps vol(gp::Origin());
+    GProp_GProps surf(gp::Origin());
+    Bnd_Box      box;
+    for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next())
+    {
+      const TopoDS_Face face = TopoDS::Face(ex.Current());
+      const FaceData&   d    = faceData(face);
+      vol.Add(faceVolume(face));
+      surf.Add(d.area);
+      box.Add(d.box);
+    }
+    // Edges and vertices outside faces count for the box (wires, points).
+    if (!shape.IsNull() && shape.ShapeType() > TopAbs_FACE)
+    {
+      BRepBndLib::AddOptimal(shape, box, false, false);
+    }
+    else
+    {
+      for (TopExp_Explorer ex(shape, TopAbs_EDGE, TopAbs_FACE); ex.More(); ex.Next())
+      {
+        BRepBndLib::AddOptimal(ex.Current(), box, false, false);
+      }
+      for (TopExp_Explorer ex(shape, TopAbs_VERTEX, TopAbs_EDGE); ex.More(); ex.Next())
+      {
+        BRepBndLib::AddOptimal(ex.Current(), box, false, false);
+      }
+    }
 
     const double volume   = vol.Mass();
     const gp_Pnt centroid = std::abs(volume) > 1e-12 ? vol.CentreOfMass() : surf.CentreOfMass();
@@ -314,8 +284,8 @@ val properties(val shapeArg)
     r.set("volume", volume);
     r.set("area", surf.Mass());
     r.set("centroid", pntToJs(centroid));
-    r.set("bbox", bboxToJs(optimalBox(shape)));
-    r.set("valid", BRepCheck_Analyzer(shape).IsValid());
+    r.set("bbox", bboxToJs(box));
+    r.set("valid", isValid(shape));
     r.set("solids", mapOf(shape, TopAbs_SOLID).Extent());
     r.set("shells", mapOf(shape, TopAbs_SHELL).Extent());
     r.set("faces", mapOf(shape, TopAbs_FACE).Extent());
@@ -337,9 +307,17 @@ val mesh(val shapeArg, val linearDeflection, val angularDeflection)
       fail("INVALID_ARGUMENT", "deflections must be positive");
     }
 
-    // Drop any previous triangulation so the result depends only on the
-    // requested deflection.
-    BRepTools::Clean(shape);
+    // Faces keep their triangulation while the deflections stay the same:
+    // a result shares the faces an operation did not touch with its input,
+    // so only the changed faces are meshed again. Other deflections drop
+    // what this shape has, so the result depends only on them.
+    static double lastLin = 0, lastAng = 0;
+    if (lin != lastLin || ang != lastAng)
+    {
+      BRepTools::Clean(shape);
+      lastLin = lin;
+      lastAng = ang;
+    }
     BRepMesh_IncrementalMesh mesher(shape, lin, false, ang, false);
     if (!mesher.IsDone())
     {
@@ -488,7 +466,7 @@ val check(val shapeArg)
   return guarded([&] {
     const TopoDS_Shape& shape = arena().get(toShapeId(shapeArg, "shape"));
     val                 r     = okResult();
-    r.set("valid", BRepCheck_Analyzer(shape).IsValid());
+    r.set("valid", isValid(shape));
     r.set("shapeType", std::string(shapeTypeName(shape.ShapeType())));
     r.set("solids", mapOf(shape, TopAbs_SOLID).Extent());
     return r;

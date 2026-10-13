@@ -454,6 +454,11 @@ export interface HeapStats {
   /** Bytes currently allocated by malloc. */
   usedBytes: number;
   liveShapes: number;
+  /**
+   * Faces, edges and checked shapes with stored query results, shared by
+   * every shape that holds them; dropped once no live shape does.
+   */
+  cachedSubShapes: number;
 }
 
 // ---------------------------------------------------------------------------
