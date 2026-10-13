@@ -360,7 +360,7 @@ export interface StepPart {
 export type StepPartsResult = Result<{
   /** One per solid, open shell or set of loose faces, placed, in millimeters. */
   parts: StepPart[];
-  /** Length units named in the file, e.g. ['MILLIMETRE'] or ['INCH']. */
+  /** Length units named in the file, lower case, e.g. ['millimetre'] or ['inch']. */
   units: string[];
   solids: number;
   /** Parts that are not solids. */

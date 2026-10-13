@@ -40,7 +40,7 @@ Without options the module resolves `occt-wasm.wasm` next to `occt-wasm.mjs` (`n
 
 | Call           | Result                                                           |
 | -------------- | ---------------------------------------------------------------- |
-| `version()`    | `{ occt: '8.0.1', facade: '0.1.0', emscripten: '6.0.12' }`       |
+| `version()`    | `{ occt: '8.0.1', facade: '0.5.0', emscripten: '6.0.12' }`       |
 | `heapStats()`  | `{ heapBytes, usedBytes, liveShapes }`                           |
 | `release(id)`  | `Result<{}>`, `INVALID_HANDLE` if the id is unknown or released  |
 | `releaseAll()` | `Result<{ released: number }>`                                   |
@@ -53,9 +53,16 @@ Without options the module resolves `occt-wasm.wasm` next to `occt-wasm.mjs` (`n
 makeBox(dx: number, dy: number, dz: number): Result<{ shape: ShapeId }>;
 makeCylinder(axisOrigin: Vec3, axisDir: Vec3, radius: number, height: number): Result<{ shape: ShapeId }>;
 makeProfileFace(plane: Plane, loops: Loop[]): Result<{ shape: ShapeId; segmentEdges: number[][] }>;
+makeVertex(point: Vec3): Result<{ shape: ShapeId }>;
+makeWire(plane: Plane, segments: Segment[]): Result<{ shape: ShapeId; closed: boolean; segmentEdges: number[] }>;
+joinEdges(parts: { shape: ShapeId; edges?: number[] }[]): Result<{ shape: ShapeId; closed: boolean; edges: number[][] }>;
 ```
 
-`makeBox` has a corner at the origin. `makeCylinder` starts at `axisOrigin` and extends `height` along `axisDir`.
+`makeBox` has a corner at the origin. `makeCylinder` starts at `axisOrigin` and extends `height` along `axisDir`. `makeVertex` is a point, for example the tip of a loft.
+
+### Wires (makeWire, joinEdges)
+
+Paths for `sweep`, open or closed. `makeWire` takes sketch segments (same `Segment` as `makeProfileFace`), `joinEdges` takes edges of shapes by `topology()` index (all edges of a shape when `edges` is omitted), so a path can mix a sketch wire and body edges. In both, the edges come in any order and direction: they are chained end to end (gap up to 1e-6 mm) from an open end and rebuilt with `BRepBuilderAPI_MakeWire`, so consecutive edges share their vertices. A path that falls apart or branches is `PATH_NOT_CONNECTED`, with the point of the gap or branch in the message. `segmentEdges[i]` (makeWire) and `edges[part][i]` (joinEdges) give the edge index in the wire of each input edge.
 
 ### makeProfileFace
 
@@ -88,6 +95,11 @@ boolean(op: 'fuse' | 'cut' | 'common', a: ShapeId, b: ShapeId): Result<{ shape; 
 fillet(shape: ShapeId, edges: number[], radius: number): Result<{ shape; history: History }>;
 chamfer(shape: ShapeId, edges: number[], distance: number): Result<{ shape; history: History }>;
 transform(shape: ShapeId, matrix: number[12]): Result<{ shape; history: History }>;
+thickSolid(shape: ShapeId, faces: number[], offset: number, options?: { tolerance?: number }): Result<{ shape; history: History }>;
+offsetShape(shape: ShapeId, offset: number, options?: { tolerance?: number }): Result<{ shape; history: History }>;
+draft(shape: ShapeId, faces: number[], direction: Vec3, angle: number, neutral: { origin: Vec3; normal: Vec3 }): Result<{ shape; history: History }>;
+sweep(profile: ShapeId, spine: ShapeId, options?: { orientation?: 'perpendicular' | 'parallel' }): Result<{ shape; history: History; sweep: SweepInfo }>;
+loft(sections: ShapeId[], options?: { solid?: boolean; ruled?: boolean }): Result<{ shape; history: History; loft: LoftInfo }>;
 ```
 
 - `extrude`: prism of a face (or wire, edge, shell) along `normalize(dir) * distance`; a negative distance extrudes backwards.
@@ -95,6 +107,11 @@ transform(shape: ShapeId, matrix: number[12]): Result<{ shape; history: History 
 - `boolean`: `BRepAlgoAPI_Fuse/Cut/Common`. Input `0` is `a`, input `1` is `b`. The result is not simplified (no `UnifySameDomain`), so co-planar faces of a fuse stay split.
 - `fillet`/`chamfer`: constant radius fillet / symmetric chamfer on the given edge indices of `shape` (duplicates ignored). The result is validated with `BRepCheck_Analyzer`; an invalid result is reported as `INVALID_RESULT` instead of being returned.
 - `transform`: a transformed copy (`BRepBuilderAPI_Transform` with copy). `matrix` is row-major 3x4 `[r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz]`, a rigid motion or a reflection (a scale other than 1 is `INVALID_ARGUMENT`). History maps every face, edge and vertex to its copy (`modified`). Used for patterns and mirrors.
+- `thickSolid`: a shell (`BRepOffsetAPI_MakeThickSolid::MakeThickSolidByJoin`, skin mode, arc joins, no intersection). `faces` are removed (open), the walls get `offset` (negative grows them inside, positive outside), `tolerance` defaults to 1e-3 mm. In the history every kept face stays `unchanged` (the outer wall) and `generated` its inner wall; a removed face is `modified` into the rim. With no face removed the result is one solid with a cavity: two shells, the offset one (`modified` from the part's faces) and the part's own. Failures are `SHELL_FAILED` with the offset algorithm's error; a wall thicker than a convex fillet's radius fails.
+- `offsetShape`: every face moved by `offset` (`BRepOffsetAPI_MakeOffsetShape`, arc joins); used for shells grown both ways. `OFFSET_FAILED` on failure.
+- `draft`: tapers `faces` by `angle` (radians, `|angle|` in (0, pi/2)) for a pull along `direction`; the faces turn about their intersection with the `neutral` plane (`BRepOffsetAPI_DraftAngle`). A positive angle narrows the part along `direction`. Tapered faces are `generated` from the original faces (they get new surfaces), their neighbours `modified`. A face that cannot be tapered fails at once with `DRAFT_FAILED` and `error.index` = its face index.
+- `sweep`: `BRepOffsetAPI_MakePipe` of a face (solid result) or wire (shell) along `spine`, a wire or an edge. `perpendicular` (default, corrected Frenet) keeps the profile's angle to the path; `parallel` (fixed trihedron) keeps its orientation in space. `sweep` is like extrude's: `bottom` the profile, `top` the end cap, `sides` the faces each profile edge generated. Self-intersecting results are `INVALID_RESULT`.
+- `loft`: `BRepOffsetAPI_ThruSections` through `sections` in order: faces without holes (their outer wire), wires, edges, and a vertex as the first or last section (a point). Sections with different numbers of edges are matched by OCCT (compatibility check on, which also aligns the start points). `solid` (default true) closes the ends; `ruled` gives straight faces between sections. A face with holes is `LOFT_FAILED` with `error.index` = the section.
 - A result that is a compound with a single child is returned as that child (OCCT wraps fillet results in a compound).
 
 ### History
@@ -134,7 +151,17 @@ interface SweepInfo {
 }
 ```
 
-`bottom` and `top` are empty for a full revolution. For extrude, `bottom` is the profile face itself, which also appears in `history.faces.unchanged`.
+`bottom` and `top` are empty for a full revolution. For extrude, `bottom` is the profile face itself, which also appears in `history.faces.unchanged`. `sweep` returns the same structure.
+
+### LoftInfo
+
+```ts
+interface LoftInfo {
+  first: number[];                              // faces closing the first section
+  last: number[];                               // faces closing the last section
+  sections: { edge: number; faces: number[] }[][]; // per section, per edge index, the side faces
+}
+```
 
 ## Queries
 
@@ -229,17 +256,35 @@ type ProjectedCurve = {
 ```ts
 exportStep(shapes: ShapeId[]): Result<{ bytes: Uint8Array }>;
 importStep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
+importStepParts(bytes: Uint8Array | ArrayBuffer, options?: { heal?: boolean; tolerance?: number }): Result<{
+  parts: {
+    shape: ShapeId;
+    type: ShapeType;             // 'solid', or 'shell' / 'face' / 'compound' when it does not close
+    valid: boolean;
+    healed: boolean;
+    name: string;                // instance name, or the product name outside an assembly
+    product: string;
+    path: string[];              // assemblies above it from the root down
+    color?: [number, number, number]; // sRGB in [0, 1]
+  }[];
+  units: string[];               // length units in the file, lower case: 'millimetre', 'inch'
+  solids: number;
+  open: number;
+  healed: number;
+}>;
 exportBrep(shape: ShapeId): Result<{ bytes: Uint8Array }>;
 importBrep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
 exportStepAssembly(assembly: {
   name?: string;
-  parts: { name?: string; shapes: ShapeId[] }[];
+  parts: { name?: string; shapes: ShapeId[]; color?: Vec3 }[];
   instances: { part: number; name?: string; matrix: number[] }[]; // row-major 3x4
 }): Result<{ bytes: Uint8Array }>;
 ```
 
 - STEP goes through in-memory streams (`STEPControl_Writer::WriteStream`, `STEPControl_Reader::ReadStream`), AP214, millimetres. Several shapes are written as several roots; on import several roots come back as one compound.
 - `exportStepAssembly` builds an XCAF document (`XCAFDoc_ShapeTool`): every part is one product (its shapes as a compound when there are several), every instance a component of the root at a rigid placement, with part and instance names (UTF-8) written as product and occurrence names (`STEPCAFControl_Writer`, name mode on). Readers that ignore the structure, `importStep` included, get every instance in place.
+- `importStepParts` reads through XCAF (`STEPCAFControl_Reader`, names and colors on, layers, properties, GD&T, materials and views off) and walks the assembly tree: every solid of every placed product is one part, in place and in millimetres whatever unit the file uses. Shells outside solids and loose faces are parts of their own. With `heal` (default) those are sewn (`BRepBuilderAPI_Sewing`, `tolerance`, default 1e-3 mm) and become solids when they close, and parts that fail `BRepCheck` go through `ShapeFix_Shape`; `healed` marks either. Colors are looked up on the solid, then the instance, then the product, surface color before generic.
+- `exportStepAssembly` writes a part's `color` (sRGB in [0, 1]) as the product's surface color.
 - `exportBrep` writes the binary BRep format (`BinTools`, without triangulation). `importBrep` reads binary or text BRep. A BRep round trip is exact and keeps the sub-shape order, so it is suitable for caching results with their history indices.
 
 ## Error codes
@@ -251,7 +296,8 @@ exportStepAssembly(assembly: {
 | `INVALID_PROFILE`     | Profile loops are open, self-intersecting or inconsistent   |
 | `INVALID_RESULT`      | Fillet/chamfer produced a shape that fails `BRepCheck`      |
 | `EMPTY_RESULT`        | The operation produced a null shape                         |
-| `EXTRUDE_FAILED`, `REVOLVE_FAILED`, `BOOLEAN_FAILED`, `FILLET_FAILED`, `CHAMFER_FAILED`, `TRANSFORM_FAILED`, `DISTANCE_FAILED`, `MESH_FAILED` | The OCCT algorithm reported failure |
+| `EXTRUDE_FAILED`, `REVOLVE_FAILED`, `BOOLEAN_FAILED`, `FILLET_FAILED`, `CHAMFER_FAILED`, `TRANSFORM_FAILED`, `SHELL_FAILED`, `OFFSET_FAILED`, `DRAFT_FAILED`, `SWEEP_FAILED`, `LOFT_FAILED`, `DISTANCE_FAILED`, `MESH_FAILED` | The OCCT algorithm reported failure; `DRAFT_FAILED` and `LOFT_FAILED` may carry `error.index` |
+| `PATH_NOT_CONNECTED`  | `makeWire` / `joinEdges`: the edges do not form one path    |
 | `STEP_READ_FAILED`, `STEP_WRITE_FAILED`, `BREP_READ_FAILED` | Exchange failures                   |
 | `OCCT_EXCEPTION`      | An OCCT `Standard_Failure` was thrown (type and message included) |
 | `STD_EXCEPTION`, `OUT_OF_MEMORY`, `UNKNOWN_EXCEPTION` | Other C++ exceptions                        |
