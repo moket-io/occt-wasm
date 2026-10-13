@@ -72,7 +72,7 @@ Measured on an Apple M4 (10 cores), macOS, Node 24.
 
 | File             | Raw      | gzip -9 | brotli -11 |
 | ---------------- | -------- | ------- | ---------- |
-| `occt-wasm.wasm` | 16.46 MB | 5.49 MB | 3.81 MB    |
+| `occt-wasm.wasm` | 19.43 MB | 6.26 MB | 4.32 MB    |
 | `occt-wasm.mjs`  | 91 KB    | 27 KB   | 23 KB      |
 
 CI fails if the brotli-compressed wasm exceeds 4.5 MB.

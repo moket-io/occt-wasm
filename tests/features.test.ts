@@ -46,7 +46,9 @@ describe('thickSolid (shell)', () => {
     const p = ok(k.properties(inside.shape));
     expect(p).toMatchObject({ valid: true, solids: 1, shells: 2, faces: 12 });
     expect(relErr(p.volume, 24000 - 36 * 26 * 16)).toBeLessThan(1e-6);
-    expect(inside.history.faces.modified).toHaveLength(6);
+    // Like the walls of an open shell: each face stays and generates its offset copy.
+    expect(inside.history.faces.unchanged).toHaveLength(6);
+    expect(inside.history.faces.generated).toHaveLength(6);
     // Outside: the part itself is the cavity.
     const outside = ok(k.properties(ok(k.thickSolid(buildR1(k).shape, [], 1)).shape));
     const grown = 24000 + 5200 + Math.PI * (40 + 30 + 20) + (4 / 3) * Math.PI;
@@ -75,6 +77,7 @@ describe('offsetShape', () => {
     expect(relErr(p.volume, volume)).toBeLessThan(1e-6);
     expect(p.bbox[0]).toBeCloseTo(-1, 6);
     expect(p.bbox[5]).toBeCloseTo(21, 6);
+    expect(grown.history.faces.generated.map((g) => g.from).sort()).toEqual([0, 1, 2, 3, 4, 5]);
   });
 });
 
