@@ -9,6 +9,12 @@
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
+#include <BRepOffsetAPI_MakePipeShell.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepBuilderAPI_TransitionMode.hxx>
+#include <BRepTools_WireExplorer.hxx>
+#include <gp.hxx>
+#include <gp_Ax2.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffset_Error.hxx>
@@ -407,30 +413,107 @@ val draft(val shape, val faces, val direction, val angle, val neutral)
 }
 
 // ---------------------------------------------------------------------------
+namespace {
+
+// Whether the wire turns sharply anywhere between consecutive edges.
+bool hasCorners(const TopoDS_Wire& wire)
+{
+  gp_Vec last;
+  bool   first = true;
+  for (BRepTools_WireExplorer it(wire); it.More(); it.Next())
+  {
+    BRepAdaptor_Curve c(it.Current());
+    const bool        reversed = it.Current().Orientation() == TopAbs_REVERSED;
+    gp_Pnt            p;
+    gp_Vec            start, end;
+    c.D1(reversed ? c.LastParameter() : c.FirstParameter(), p, start);
+    c.D1(reversed ? c.FirstParameter() : c.LastParameter(), p, end);
+    if (reversed)
+    {
+      start.Reverse();
+      end.Reverse();
+    }
+    if (!first && start.Magnitude() > gp::Resolution() && last.Magnitude() > gp::Resolution()
+        && last.Angle(start) > 1e-6)
+    {
+      return true;
+    }
+    last  = end;
+    first = false;
+  }
+  return false;
+}
+
+} // namespace
+
 val sweep(val profile, val spine, val options)
 {
   return guarded([&] {
     const TopoDS_Shape& input = arena().get(toShapeId(profile, "profile"));
     const TopoDS_Wire   path  = asWire(arena().get(toShapeId(spine, "spine")), "spine");
     const std::string   mode  = text(options, "orientation", "perpendicular");
-    GeomFill_Trihedron  trihedron;
-    if (mode == "perpendicular")
-    {
-      trihedron = GeomFill_IsCorrectedFrenet;
-    }
-    else if (mode == "parallel")
-    {
-      trihedron = GeomFill_IsFixed;
-    }
-    else
+    if (mode != "perpendicular" && mode != "parallel")
     {
       fail("INVALID_ARGUMENT", "options.orientation must be 'perpendicular' or 'parallel'");
     }
-    BRepOffsetAPI_MakePipe algo(path, input, trihedron, false);
+    int wires = 0;
+    for (TopExp_Explorer it(input, TopAbs_WIRE); it.More(); it.Next())
+    {
+      ++wires;
+    }
+    const bool isFace = input.ShapeType() == TopAbs_FACE;
+
+    // A profile with holes sweeps in one piece with MakePipe, which handles
+    // smooth paths only: at a sharp corner it silently builds a wrong solid.
+    if (wires > 1)
+    {
+      if (hasCorners(path))
+      {
+        fail("SWEEP_FAILED", "a profile with holes needs a path without sharp corners");
+      }
+      BRepOffsetAPI_MakePipe algo(path, input,
+                                  mode == "parallel" ? GeomFill_IsFixed : GeomFill_IsCorrectedFrenet,
+                                  false);
+      algo.Build();
+      if (!algo.IsDone())
+      {
+        fail("SWEEP_FAILED", "sweep failed");
+      }
+      const TopoDS_Shape result = unwrap(algo.Shape());
+      requireValid(result, "sweep");
+      val history = buildHistory(algo, {input}, result);
+      val info    = sweepInfo(algo, input, result);
+      val r       = opResult(arena().put(result), history);
+      r.set("sweep", info);
+      return r;
+    }
+
+    // One wire: MakePipeShell, with mitred corners where the path turns.
+    const TopoDS_Wire section =
+      isFace ? BRepTools::OuterWire(TopoDS::Face(input)) : asWire(input, "profile");
+    BRepOffsetAPI_MakePipeShell algo(path);
+    if (mode == "parallel")
+    {
+      algo.SetMode(gp_Ax2());
+    }
+    else
+    {
+      algo.SetMode(false);
+    }
+    algo.SetTransitionMode(BRepBuilderAPI_RightCorner);
+    algo.Add(section, false, false);
+    if (!algo.IsReady())
+    {
+      fail("SWEEP_FAILED", "the profile cannot be swept along this path");
+    }
     algo.Build();
     if (!algo.IsDone())
     {
       fail("SWEEP_FAILED", "sweep failed");
+    }
+    if (isFace && !algo.MakeSolid())
+    {
+      fail("SWEEP_FAILED", "the swept shell does not close into a solid");
     }
     const TopoDS_Shape result = unwrap(algo.Shape());
     requireValid(result, "sweep");

@@ -178,6 +178,30 @@ describe('sweep', () => {
     expect(p.bbox[5]).toBeCloseTo(42, 4);
   });
 
+  it('sweeps along a path with a sharp corner with a mitred joint', () => {
+    const disc = ok(k.makeProfileFace(XY, [circleLoop(0, 0, 3)])).shape;
+    // Up 30, then along X 30: the mitre keeps pi r^2 times the centerline length.
+    const corner = ok(
+      k.makeWire(XZ, [
+        { kind: 'line', a: [0, 0], b: [0, 30] },
+        { kind: 'line', a: [0, 30], b: [30, 30] },
+      ]),
+    ).shape;
+    const s = ok(k.sweep(disc, corner));
+    const p = ok(k.properties(s.shape));
+    expect(p.valid).toBe(true);
+    expect(relErr(p.volume, Math.PI * 9 * 60)).toBeLessThan(1e-6);
+    expect(p.bbox[3]).toBeCloseTo(30, 6);
+    expect(p.bbox[5]).toBeCloseTo(33, 6);
+    expect([s.sweep.bottom.length, s.sweep.top.length]).toEqual([1, 1]);
+    expect(s.sweep.sides[0].faces).toHaveLength(2);
+
+    // A profile with holes sweeps only along smooth paths.
+    const ring = ok(k.makeProfileFace(XY, [circleLoop(0, 0, 3), circleLoop(0, 0, 2)])).shape;
+    const r = k.sweep(ring, corner);
+    expect(code(r)).toBe('SWEEP_FAILED');
+  });
+
   it('rejects a spine that is not a wire', () => {
     const profile = ok(k.makeProfileFace(XY, [circleLoop(0, 0, 2)])).shape;
     expect(code(k.sweep(profile, buildR1(k).shape))).toBe('INVALID_ARGUMENT');
