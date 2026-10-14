@@ -101,6 +101,7 @@ EMSCRIPTEN_BINDINGS(occt_wasm)
   function("makeBox", &makeBox);
   function("makeCylinder", &makeCylinder);
   function("makeVertex", &makeVertex);
+  function("helix", &helix);
   function("subShape", &subShape);
   function("makeProfileFace", &makeProfileFace);
   function("makeWire", &makeWire);

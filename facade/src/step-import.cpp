@@ -108,6 +108,25 @@ bool colorOf(const occ::handle<XCAFDoc_ColorTool>& colors,
   return false;
 }
 
+// A face's own colour: on its sub-shape label in the product, found by the
+// face in product coordinates (or as it is, for files that colour placed
+// faces).
+bool faceColorOf(const occ::handle<XCAFDoc_ColorTool>& colors,
+                 const TopoDS_Shape&                   face,
+                 const Leaf&                           leaf,
+                 Quantity_Color&                       color)
+{
+  const TopoDS_Shape inProduct = face.Moved(leaf.location.Inverted());
+  for (XCAFDoc_ColorType type : {XCAFDoc_ColorSurf, XCAFDoc_ColorGen})
+  {
+    if (colors->GetColor(inProduct, type, color) || colors->GetColor(face, type, color))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 val colorToJs(const Quantity_Color& c)
 {
   double r = 0, g = 0, b = 0;
@@ -272,9 +291,29 @@ val importStepParts(val bytes, val options)
         }
         part.set("path", path);
         Quantity_Color color;
-        if (colorOf(colors, original, leaf, color))
+        const bool     hasColor = colorOf(colors, original, leaf, color);
+        if (hasColor)
         {
           part.set("color", colorToJs(color));
+        }
+        // Faces whose colour differs from the part's, by face map index.
+        const ShapeMap faces      = mapOf(result, TopAbs_FACE);
+        val            faceColors = val::array();
+        int            colored    = 0;
+        for (int f = 1; f <= faces.Extent(); ++f)
+        {
+          Quantity_Color own;
+          if (faceColorOf(colors, faces(f), leaf, own) && (!hasColor || own.IsDifferent(color)))
+          {
+            val entry = val::object();
+            entry.set("face", f - 1);
+            entry.set("color", colorToJs(own));
+            faceColors.set(colored++, entry);
+          }
+        }
+        if (colored > 0)
+        {
+          part.set("faceColors", faceColors);
         }
         parts.set(n++, part);
       }

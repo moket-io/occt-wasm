@@ -452,9 +452,16 @@ val sweep(val profile, val spine, val options)
     const TopoDS_Shape& input = arena().get(toShapeId(profile, "profile"));
     const TopoDS_Wire   path  = asWire(arena().get(toShapeId(spine, "spine")), "spine");
     const std::string   mode  = text(options, "orientation", "perpendicular");
-    if (mode != "perpendicular" && mode != "parallel")
+    if (mode != "perpendicular" && mode != "parallel" && mode != "binormal")
     {
-      fail("INVALID_ARGUMENT", "options.orientation must be 'perpendicular' or 'parallel'");
+      fail("INVALID_ARGUMENT", "options.orientation must be 'perpendicular', 'parallel' or 'binormal'");
+    }
+    // Binormal: the profile keeps its angle to a fixed direction, e.g. a
+    // helix axis, so a thread or coil profile does not twist.
+    gp_Dir binormal(0, 0, 1);
+    if (mode == "binormal")
+    {
+      binormal = toDir(options["binormal"], "options.binormal");
     }
     int wires = 0;
     for (TopExp_Explorer it(input, TopAbs_WIRE); it.More(); it.Next())
@@ -467,6 +474,10 @@ val sweep(val profile, val spine, val options)
     // smooth paths only: at a sharp corner it silently builds a wrong solid.
     if (wires > 1)
     {
+      if (mode == "binormal")
+      {
+        fail("SWEEP_FAILED", "a profile with holes cannot be swept with a binormal");
+      }
       if (hasCorners(path))
       {
         fail("SWEEP_FAILED", "a profile with holes needs a path without sharp corners");
@@ -495,6 +506,10 @@ val sweep(val profile, val spine, val options)
     if (mode == "parallel")
     {
       algo.SetMode(gp_Ax2());
+    }
+    else if (mode == "binormal")
+    {
+      algo.SetMode(binormal);
     }
     else
     {

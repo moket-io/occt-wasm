@@ -1,5 +1,6 @@
-// STEP export of an assembly through XCAF: one product per part, placed as
-// named instances, so other CAD systems see the structure and the names.
+// STEP export through XCAF: an assembly as one product per part, placed as
+// named instances, so other CAD systems see the structure and the names;
+// colours on products, shapes, faces and instances.
 //
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
@@ -49,7 +50,149 @@ std::string stringOf(const val& v, const char* name)
   return v.as<std::string>();
 }
 
+bool given(const val& v)
+{
+  return !(v.isUndefined() || v.isNull());
+}
+
+Quantity_Color colorOf(const val& v, const char* name)
+{
+  const std::vector<double> c = toDoubles(v, name, 3);
+  for (double x : c)
+  {
+    if (!(x >= 0 && x <= 1))
+    {
+      fail("INVALID_ARGUMENT", std::string(name) + " must be sRGB in [0, 1]");
+    }
+  }
+  return Quantity_Color(c[0], c[1], c[2], Quantity_TOC_sRGB);
+}
+
+// A product of `ids` (a compound when there are several) with its colours:
+// `color` on the product, `shapeColors[i]` on shape i, and `faceColors`
+// ({shape, faces, color}, faces by TopExp::MapShapes index of that shape).
+TDF_Label addProduct(const occ::handle<XCAFDoc_ShapeTool>& tool,
+                     const occ::handle<XCAFDoc_ColorTool>& colors,
+                     const std::vector<int>&               ids,
+                     const val&                            spec,
+                     const std::string&                    where)
+{
+  if (ids.empty())
+  {
+    fail("INVALID_ARGUMENT", where + ".shapes must not be empty");
+  }
+  TopoDS_Shape shape;
+  if (ids.size() == 1)
+  {
+    shape = arena().get(ids[0]);
+  }
+  else
+  {
+    TopoDS_Compound compound;
+    BRep_Builder    builder;
+    builder.MakeCompound(compound);
+    for (int id : ids)
+    {
+      builder.Add(compound, arena().get(id));
+    }
+    shape = compound;
+  }
+  const TDF_Label label = tool->AddShape(shape, false, false);
+  setName(label, stringOf(spec["name"], (where + ".name").c_str()));
+  if (given(spec["color"]))
+  {
+    colors->SetColor(label, colorOf(spec["color"], (where + ".color").c_str()), XCAFDoc_ColorSurf);
+  }
+  const val shapeColors = spec["shapeColors"];
+  if (given(shapeColors))
+  {
+    if (!shapeColors.isArray() || shapeColors["length"].as<size_t>() != ids.size())
+    {
+      fail("INVALID_ARGUMENT", where + ".shapeColors must have one entry per shape");
+    }
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+      const val c = shapeColors[i];
+      if (!given(c))
+      {
+        continue;
+      }
+      const TDF_Label sub = ids.size() == 1 ? label : tool->AddSubShape(label, arena().get(ids[i]));
+      if (sub.IsNull())
+      {
+        fail("INVALID_ARGUMENT", where + ".shapeColors: shape is not part of the product");
+      }
+      colors->SetColor(sub, colorOf(c, (where + ".shapeColors[]").c_str()), XCAFDoc_ColorSurf);
+    }
+  }
+  const val faceColors = spec["faceColors"];
+  if (given(faceColors))
+  {
+    if (!faceColors.isArray())
+    {
+      fail("INVALID_ARGUMENT", where + ".faceColors must be an array");
+    }
+    const int count = faceColors["length"].as<int>();
+    for (int i = 0; i < count; ++i)
+    {
+      const val entry = faceColors[i];
+      const int index = toInt(entry["shape"], "faceColors[].shape");
+      if (index < 0 || static_cast<size_t>(index) >= ids.size())
+      {
+        fail("INVALID_ARGUMENT", where + ".faceColors[].shape is out of range");
+      }
+      const ShapeMap         faces = mapOf(arena().get(ids[static_cast<size_t>(index)]), TopAbs_FACE);
+      const Quantity_Color   color = colorOf(entry["color"], "faceColors[].color");
+      const std::vector<int> picks = toInts(entry["faces"], "faceColors[].faces");
+      for (int f : picks)
+      {
+        if (f < 0 || f >= faces.Extent())
+        {
+          fail("INVALID_ARGUMENT", where + ".faceColors[].faces: no face " + std::to_string(f));
+        }
+        const TDF_Label sub = tool->AddSubShape(label, faces(f + 1));
+        if (sub.IsNull())
+        {
+          fail("INVALID_ARGUMENT", where + ".faceColors: face is not part of the product");
+        }
+        colors->SetColor(sub, color, XCAFDoc_ColorSurf);
+      }
+    }
+  }
+  return label;
+}
+
+val writeDocument(const occ::handle<TDocStd_Document>& doc)
+{
+  STEPCAFControl_Writer writer;
+  writer.SetNameMode(true);
+  writer.SetColorMode(true);
+  if (!writer.Transfer(doc, STEPControl_AsIs))
+  {
+    fail("STEP_WRITE_FAILED", "cannot transfer the document to STEP");
+  }
+  std::ostringstream os;
+  if (writer.ChangeWriter().WriteStream(os) != IFSelect_RetDone)
+  {
+    fail("STEP_WRITE_FAILED", "cannot write STEP stream");
+  }
+  val r = okResult();
+  r.set("bytes", bytesToJs(os.str()));
+  return r;
+}
+
 } // namespace
+
+val exportStepColored(val shapes, val options)
+{
+  return guarded([&] {
+    occ::handle<TDocStd_Document>  doc    = new TDocStd_Document("MDTV-XCAF");
+    occ::handle<XCAFDoc_ShapeTool> tool   = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+    occ::handle<XCAFDoc_ColorTool> colors = XCAFDoc_DocumentTool::ColorTool(doc->Main());
+    addProduct(tool, colors, toInts(shapes, "shapes"), options, "options");
+    return writeDocument(doc);
+  });
+}
 
 val exportStepAssembly(val assembly)
 {
@@ -77,36 +220,8 @@ val exportStepAssembly(val assembly)
     std::vector<TDF_Label> products;
     for (int i = 0; i < partCount; ++i)
     {
-      const val              part = parts[i];
-      const std::vector<int> ids  = toInts(part["shapes"], "parts[].shapes");
-      if (ids.empty())
-      {
-        fail("INVALID_ARGUMENT", "parts[].shapes must not be empty");
-      }
-      TopoDS_Shape shape;
-      if (ids.size() == 1)
-      {
-        shape = arena().get(ids[0]);
-      }
-      else
-      {
-        TopoDS_Compound compound;
-        BRep_Builder    builder;
-        builder.MakeCompound(compound);
-        for (int id : ids)
-        {
-          builder.Add(compound, arena().get(id));
-        }
-        shape = compound;
-      }
-      const TDF_Label label = tool->AddShape(shape, false, false);
-      setName(label, stringOf(part["name"], "parts[].name"));
-      if (!part["color"].isUndefined() && !part["color"].isNull())
-      {
-        const std::vector<double> c = toDoubles(part["color"], "parts[].color", 3);
-        colors->SetColor(label, Quantity_Color(c[0], c[1], c[2], Quantity_TOC_sRGB), XCAFDoc_ColorSurf);
-      }
-      products.push_back(label);
+      const val part = parts[i];
+      products.push_back(addProduct(tool, colors, toInts(part["shapes"], "parts[].shapes"), part, "parts[]"));
     }
 
     for (int i = 0; i < instanceCount; ++i)
@@ -127,24 +242,13 @@ val exportStepAssembly(val assembly)
       const TDF_Label component =
         tool->AddComponent(root, products[static_cast<size_t>(part)], TopLoc_Location(trsf));
       setName(component, stringOf(instance["name"], "instances[].name"));
+      if (given(instance["color"]))
+      {
+        colors->SetColor(component, colorOf(instance["color"], "instances[].color"), XCAFDoc_ColorSurf);
+      }
     }
     tool->UpdateAssemblies();
-
-    STEPCAFControl_Writer writer;
-    writer.SetNameMode(true);
-    writer.SetColorMode(true);
-    if (!writer.Transfer(doc, STEPControl_AsIs))
-    {
-      fail("STEP_WRITE_FAILED", "cannot transfer the assembly to STEP");
-    }
-    std::ostringstream os;
-    if (writer.ChangeWriter().WriteStream(os) != IFSelect_RetDone)
-    {
-      fail("STEP_WRITE_FAILED", "cannot write STEP stream");
-    }
-    val r = okResult();
-    r.set("bytes", bytesToJs(os.str()));
-    return r;
+    return writeDocument(doc);
   });
 }
 

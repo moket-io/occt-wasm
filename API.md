@@ -54,12 +54,14 @@ makeBox(dx: number, dy: number, dz: number): Result<{ shape: ShapeId }>;
 makeCylinder(axisOrigin: Vec3, axisDir: Vec3, radius: number, height: number): Result<{ shape: ShapeId }>;
 makeProfileFace(plane: Plane, loops: Loop[]): Result<{ shape: ShapeId; segmentEdges: number[][] }>;
 makeVertex(point: Vec3): Result<{ shape: ShapeId }>;
+helix(axisOrigin: Vec3, axisDir: Vec3, radius: number, pitch: number, height: number,
+      options?: { xDir?: Vec3; leftHanded?: boolean; taper?: number }): Result<{ shape: ShapeId }>;
 subShape(shape: ShapeId, kind: 'solid' | 'shell' | 'face' | 'wire' | 'edge' | 'vertex', index: number): Result<{ shape: ShapeId }>;
 makeWire(plane: Plane, segments: Segment[]): Result<{ shape: ShapeId; closed: boolean; segmentEdges: number[] }>;
 joinEdges(parts: { shape: ShapeId; edges?: number[] }[]): Result<{ shape: ShapeId; closed: boolean; edges: number[][] }>;
 ```
 
-`makeBox` has a corner at the origin. `makeCylinder` starts at `axisOrigin` and extends `height` along `axisDir`. `makeVertex` is a point, for example the tip of a loft. `subShape` puts a sub-shape of a shape into the arena as a shape of its own, by its index in `TopExp::MapShapes` order of that kind (the `topology()` index for faces, edges and vertices), for example a planar face of a body as a loft section.
+`makeBox` has a corner at the origin. `makeCylinder` starts at `axisOrigin` and extends `height` along `axisDir`. `makeVertex` is a point, for example the tip of a loft. `helix` (0.7.0) is a wire of one edge: a line in the (angle, height) parameters of a cylinder of `radius` about the axis, or of a cone when `taper` (the half angle in radians, positive widens upward) is set, built with `BRepBuilderAPI_MakeEdge` on the surface and given a 3D curve (`BRepLib::BuildCurves3d`, 1e-7). It starts at the axis origin plus `radius` along `xDir` (any direction perpendicular to the axis by default), turns right-handed about `axisDir` unless `leftHanded`, rises `pitch` per turn and ends at `height` along the axis, so its length is `turns * hypot(2 pi r, pitch)` on a cylinder. A path for `sweep` (threads, springs) with `orientation: 'binormal'`. `subShape` puts a sub-shape of a shape into the arena as a shape of its own, by its index in `TopExp::MapShapes` order of that kind (the `topology()` index for faces, edges and vertices), for example a planar face of a body as a loft section.
 
 ### Wires (makeWire, joinEdges)
 
@@ -99,7 +101,7 @@ transform(shape: ShapeId, matrix: number[12]): Result<{ shape; history: History 
 thickSolid(shape: ShapeId, faces: number[], offset: number, options?: { tolerance?: number }): Result<{ shape; history: History }>;
 offsetShape(shape: ShapeId, offset: number, options?: { tolerance?: number }): Result<{ shape; history: History }>;
 draft(shape: ShapeId, faces: number[], direction: Vec3, angle: number, neutral: { origin: Vec3; normal: Vec3 }): Result<{ shape; history: History }>;
-sweep(profile: ShapeId, spine: ShapeId, options?: { orientation?: 'perpendicular' | 'parallel' }): Result<{ shape; history: History; sweep: SweepInfo }>;
+sweep(profile: ShapeId, spine: ShapeId, options?: { orientation?: 'perpendicular' | 'parallel' | 'binormal'; binormal?: Vec3 }): Result<{ shape; history: History; sweep: SweepInfo }>;
 loft(sections: ShapeId[], options?: { solid?: boolean; ruled?: boolean }): Result<{ shape; history: History; loft: LoftInfo }>;
 ```
 
@@ -111,7 +113,7 @@ loft(sections: ShapeId[], options?: { solid?: boolean; ruled?: boolean }): Resul
 - `thickSolid`: a shell (`BRepOffsetAPI_MakeThickSolid::MakeThickSolidByJoin`, skin mode, arc joins, no intersection). `faces` are removed (open), the walls get `offset` (negative grows them inside, positive outside), `tolerance` defaults to 1e-3 mm. In the history every kept face stays `unchanged` (the outer wall) and `generated` its inner wall; a removed face is `modified` into the rim. With no face removed the result is one solid with a cavity: two shells, the part's own (`unchanged`) and the offset one (`generated` from the part's faces). Failures are `SHELL_FAILED` with the offset algorithm's error; a wall thicker than a convex fillet's radius fails.
 - `offsetShape`: every face moved by `offset` (`BRepOffsetAPI_MakeOffsetShape`, arc joins), each `generated` from its face; edges and corners grow into rounds outside. Used for shells grown both ways. `OFFSET_FAILED` on failure.
 - `draft`: tapers `faces` by `angle` (radians, `|angle|` in (0, pi/2)) for a pull along `direction`; the faces turn about their intersection with the `neutral` plane (`BRepOffsetAPI_DraftAngle`). A positive angle narrows the part along `direction`. Tapered faces are `generated` from the original faces (they get new surfaces), their neighbours `modified`. A face that cannot be tapered fails at once with `DRAFT_FAILED` and `error.index` = its face index.
-- `sweep`: a face (solid result) or wire (shell) along `spine`, a wire or an edge. `perpendicular` (default, corrected Frenet) keeps the profile's angle to the path; `parallel` (fixed trihedron) keeps its orientation in space. A profile of one wire goes through `BRepOffsetAPI_MakePipeShell` with mitred corners (`BRepBuilderAPI_RightCorner`) where the path turns sharply. A face with holes goes through `BRepOffsetAPI_MakePipe` in one piece, which builds wrong solids at sharp corners, so a path with sharp corners and a profile with holes is `SWEEP_FAILED`. `sweep` is like extrude's: `bottom` the profile, `top` the end cap, `sides` the faces each profile edge generated. Self-intersecting results are `INVALID_RESULT`.
+- `sweep`: a face (solid result) or wire (shell) along `spine`, a wire or an edge. `perpendicular` (default, corrected Frenet) keeps the profile's angle to the path; `parallel` (fixed trihedron) keeps its orientation in space. `binormal` (0.7.0, `BRepOffsetAPI_MakePipeShell::SetMode(gp_Dir)`) keeps the profile's angle to the direction `binormal`, for example a helix axis, so a thread or coil profile does not twist; profiles with holes are refused. A profile of one wire goes through `BRepOffsetAPI_MakePipeShell` with mitred corners (`BRepBuilderAPI_RightCorner`) where the path turns sharply. A face with holes goes through `BRepOffsetAPI_MakePipe` in one piece, which builds wrong solids at sharp corners, so a path with sharp corners and a profile with holes is `SWEEP_FAILED`. `sweep` is like extrude's: `bottom` the profile, `top` the end cap, `sides` the faces each profile edge generated. Self-intersecting results are `INVALID_RESULT`.
 - `loft`: `BRepOffsetAPI_ThruSections` through `sections` in order: faces without holes (their outer wire), wires, edges, and a vertex as the first or last section (a point). Sections with different numbers of edges are matched by OCCT (compatibility check on, which also aligns the start points). `solid` (default true) closes the ends; `ruled` gives straight faces between sections. A face with holes is `LOFT_FAILED` with `error.index` = the section.
 - A result that is a compound with a single child is returned as that child (OCCT wraps fillet results in a compound).
 
@@ -257,7 +259,12 @@ type ProjectedCurve = {
 ## Exchange
 
 ```ts
-exportStep(shapes: ShapeId[]): Result<{ bytes: Uint8Array }>;
+exportStep(shapes: ShapeId[], options?: {
+  name?: string;
+  color?: Vec3;                                    // the product, sRGB in [0, 1]
+  shapeColors?: (Vec3 | null)[];                   // one per shape
+  faceColors?: { shape: number; faces: number[]; color: Vec3 }[]; // faces by topology() index of shapes[shape]
+}): Result<{ bytes: Uint8Array }>;
 importStep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
 importStepParts(bytes: Uint8Array | ArrayBuffer, options?: { heal?: boolean; tolerance?: number }): Result<{
   parts: {
@@ -269,6 +276,7 @@ importStepParts(bytes: Uint8Array | ArrayBuffer, options?: { heal?: boolean; tol
     product: string;
     path: string[];              // assemblies above it from the root down
     color?: [number, number, number]; // sRGB in [0, 1]
+    faceColors?: { face: number; color: [number, number, number] }[]; // faces whose colour differs from color
   }[];
   units: string[];               // length units in the file, lower case: 'millimetre', 'inch'
   solids: number;
@@ -279,15 +287,16 @@ exportBrep(shape: ShapeId): Result<{ bytes: Uint8Array }>;
 importBrep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
 exportStepAssembly(assembly: {
   name?: string;
-  parts: { name?: string; shapes: ShapeId[]; color?: Vec3 }[];
-  instances: { part: number; name?: string; matrix: number[] }[]; // row-major 3x4
+  parts: { name?: string; shapes: ShapeId[]; color?: Vec3; shapeColors?: (Vec3 | null)[];
+           faceColors?: { shape: number; faces: number[]; color: Vec3 }[] }[];
+  instances: { part: number; name?: string; matrix: number[]; color?: Vec3 }[]; // row-major 3x4
 }): Result<{ bytes: Uint8Array }>;
 ```
 
 - STEP goes through in-memory streams (`STEPControl_Writer::WriteStream`, `STEPControl_Reader::ReadStream`), AP214, millimetres. Several shapes are written as several roots; on import several roots come back as one compound.
 - `exportStepAssembly` builds an XCAF document (`XCAFDoc_ShapeTool`): every part is one product (its shapes as a compound when there are several), every instance a component of the root at a rigid placement, with part and instance names (UTF-8) written as product and occurrence names (`STEPCAFControl_Writer`, name mode on). Readers that ignore the structure, `importStep` included, get every instance in place.
 - `importStepParts` reads through XCAF (`STEPCAFControl_Reader`, names and colors on, layers, properties, GD&T, materials and views off) and walks the assembly tree: every solid of every placed product is one part, in place and in millimetres whatever unit the file uses. Shells outside solids and loose faces are parts of their own. With `heal` (default) those are sewn (`BRepBuilderAPI_Sewing`, `tolerance`, default 1e-3 mm) and become solids when they close, and parts that fail `BRepCheck` go through `ShapeFix_Shape`; `healed` marks either. Colors are looked up on the solid, then the instance, then the product, surface color before generic.
-- `exportStepAssembly` writes a part's `color` (sRGB in [0, 1]) as the product's surface color.
+- Colours (0.7.0): `exportStep` with options and `exportStepAssembly` write a product's `color`, each shape's of `shapeColors` (on its sub-shape label when the product is a compound) and `faceColors` (on face sub-shape labels, faces by `TopExp::MapShapes` index of that shape) as surface colours through XCAF (`XCAFDoc_ColorTool`, `STEPCAFControl_Writer` colour mode on); an instance's `color` goes on its component label and wins over the product for that instance. `exportStep` without options keeps the plain writer. `importStepParts` returns `faceColors` for faces whose own colour (looked up in product coordinates, then as placed) differs from the part's `color`, by `topology()` index of the returned shape; faces of healed parts may have none.
 - `exportBrep` writes the binary BRep format (`BinTools`, without triangulation). `importBrep` reads binary or text BRep. A BRep round trip is exact and keeps the sub-shape order, so it is suitable for caching results with their history indices.
 
 ## Error codes

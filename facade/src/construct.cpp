@@ -12,7 +12,11 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepLib.hxx>
 #include <BRep_Builder.hxx>
+#include <Geom2d_Line.hxx>
+#include <Geom_ConicalSurface.hxx>
+#include <Geom_CylindricalSurface.hxx>
 #include <Precision.hxx>
 #include <TopExp.hxx>
 #include <TopoDS.hxx>
@@ -328,6 +332,76 @@ val makeCylinder(val axisOrigin, val axisDir, val radius, val height)
     gp_Ax2                   ax(toPnt(axisOrigin, "axisOrigin"), toDir(axisDir, "axisDir"));
     BRepPrimAPI_MakeCylinder mk(ax, positive(radius, "radius"), positive(height, "height"));
     return shapeResult(arena().put(mk.Shape()));
+  });
+}
+
+// A helix as a wire of one edge: a line in the (angle, height) parameters
+// of a cylinder, or of a cone when `taper` (the half angle, radians) is set.
+// It starts on `xDir` (or any direction perpendicular to the axis) at the
+// axis origin, turns right-handed about the axis unless `leftHanded`, and
+// rises `pitch` per turn up to `height` along the axis.
+val helix(val axisOrigin, val axisDir, val radius, val pitch, val height, val options)
+{
+  return guarded([&] {
+    const gp_Pnt origin = toPnt(axisOrigin, "axisOrigin");
+    const gp_Dir axis   = toDir(axisDir, "axisDir");
+    const double r      = positive(radius, "radius");
+    const double p      = positive(pitch, "pitch");
+    const double h      = positive(height, "height");
+    const bool   hasOptions = !(options.isUndefined() || options.isNull());
+    const bool   left =
+      hasOptions && !options["leftHanded"].isUndefined() && options["leftHanded"].as<bool>();
+    const double taper =
+      hasOptions && !options["taper"].isUndefined() ? toNumber(options["taper"], "options.taper") : 0;
+    if (std::abs(taper) >= M_PI / 2 - 1e-3)
+    {
+      fail("INVALID_ARGUMENT", "options.taper must be less than 90 degrees");
+    }
+    gp_Ax3 frame(origin, axis);
+    if (hasOptions && !options["xDir"].isUndefined())
+    {
+      const gp_Dir x = toDir(options["xDir"], "options.xDir");
+      if (std::abs(x.Dot(axis)) > 1e-9)
+      {
+        fail("INVALID_ARGUMENT", "options.xDir must be perpendicular to axisDir");
+      }
+      frame = gp_Ax3(origin, axis, x);
+    }
+    occ::handle<Geom_Surface> surface;
+    // The surface's v runs along the axis on a cylinder, along the slant on
+    // a cone: v = height / cos(taper).
+    double slant = 1;
+    if (taper == 0)
+    {
+      surface = new Geom_CylindricalSurface(frame, r);
+    }
+    else
+    {
+      surface = new Geom_ConicalSurface(frame, taper, r);
+      slant   = 1 / std::cos(taper);
+      if (r + h * std::tan(taper) <= Precision::Confusion())
+      {
+        fail("INVALID_ARGUMENT", "the taper closes the helix before its height");
+      }
+    }
+    const double turns = h / p;
+    const double du    = (left ? -2 : 2) * M_PI;
+    const double dv    = p * slant;
+    const double perTurn = std::sqrt(du * du + dv * dv);
+    occ::handle<Geom2d_Line> line = new Geom2d_Line(gp_Pnt2d(0, 0), gp_Dir2d(du, dv));
+    BRepBuilderAPI_MakeEdge  edge(line, surface, 0, turns * perTurn);
+    if (!edge.IsDone())
+    {
+      fail("INVALID_ARGUMENT", "cannot build the helix");
+    }
+    TopoDS_Edge e = edge.Edge();
+    BRepLib::BuildCurves3d(e, 1e-7, GeomAbs_C2, 14, std::max(32, static_cast<int>(std::ceil(turns * 8))));
+    BRepBuilderAPI_MakeWire wire(e);
+    if (!wire.IsDone())
+    {
+      fail("INVALID_ARGUMENT", "cannot build the helix");
+    }
+    return shapeResult(arena().put(wire.Wire()));
   });
 }
 

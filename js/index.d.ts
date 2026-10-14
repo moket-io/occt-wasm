@@ -212,7 +212,12 @@ export interface SweepOptions {
    * perpendicular: the profile keeps its angle to the path (corrected Frenet).
    * parallel: the profile keeps its orientation in space. Default perpendicular.
    */
-  orientation?: 'perpendicular' | 'parallel';
+  orientation?: 'perpendicular' | 'parallel' | 'binormal';
+  /**
+   * binormal: the profile keeps its angle to this direction, e.g. a helix
+   * axis, so a thread or coil profile does not twist. Profiles without holes.
+   */
+  binormal?: Vec3;
 }
 
 export interface LoftOptions {
@@ -339,6 +344,29 @@ export interface StepImportOptions {
   tolerance?: number;
 }
 
+export interface HelixOptions {
+  /** Where the helix starts, perpendicular to the axis. */
+  xDir?: Vec3;
+  leftHanded?: boolean;
+  /** Half angle of a cone, radians; positive widens upward. Default 0 (a cylinder). */
+  taper?: number;
+}
+
+/** Colours of one STEP product (sRGB in [0, 1]). */
+export interface StepColors {
+  /** The product's surface colour. */
+  color?: Vec3;
+  /** One per shape of the product; null for none. */
+  shapeColors?: ReadonlyArray<Vec3 | null>;
+  /** Faces by index in TopExp::MapShapes order of shape `shape` (an index into the shapes). */
+  faceColors?: ReadonlyArray<{ shape: number; faces: ArrayLike<number>; color: Vec3 }>;
+}
+
+export interface StepExportOptions extends StepColors {
+  /** The product name. */
+  name?: string;
+}
+
 export interface StepPart {
   shape: ShapeId;
   /** solid; shell or compound (loose faces) when it does not close. */
@@ -355,6 +383,8 @@ export interface StepPart {
   path: string[];
   /** sRGB in [0, 1] from the file, when it has one. */
   color?: [number, number, number];
+  /** Faces whose colour differs from `color`, by index in TopExp::MapShapes order of `shape`. */
+  faceColors?: { face: number; color: [number, number, number] }[];
 }
 
 export type StepPartsResult = Result<{
@@ -480,6 +510,12 @@ export interface OcctKernel {
   /** A point, e.g. the tip of a loft. */
   makeVertex(point: Vec3): ShapeResult;
   /**
+   * A helix as a wire of one edge on a cylinder (or a cone with `taper`),
+   * starting at `axisOrigin` + radius along `xDir`, rising `pitch` per turn
+   * up to `height` along the axis; right-handed unless `leftHanded`.
+   */
+  helix(axisOrigin: Vec3, axisDir: Vec3, radius: number, pitch: number, height: number, options?: HelixOptions): ShapeResult;
+  /**
    * A sub-shape as a shape of its own (same TopoDS shape, located), by its
    * topology() index for faces, edges and vertices; e.g. a planar face of a
    * body as a loft section.
@@ -548,7 +584,8 @@ export interface OcctKernel {
   /** Exact hidden line removal (HLRBRep_Algo) onto the view plane; the shapes hide each other. */
   project(shapes: ShapeId | readonly ShapeId[], view: ProjectView): ProjectResult;
 
-  exportStep(shapes: ArrayLike<ShapeId>): BytesResult;
+  /** With options, one named product with colours through XCAF. */
+  exportStep(shapes: ArrayLike<ShapeId>, options?: StepExportOptions): BytesResult;
   /** The whole file as one shape (a compound when it holds several). */
   importStep(bytes: Uint8Array | ArrayBuffer): ShapeResult;
   /** The file part by part with names, colors and assembly paths (XCAF). */
@@ -567,13 +604,13 @@ export interface OcctKernel {
 export interface StepAssembly {
   /** Name of the root product. */
   name?: string;
-  /** color: sRGB in [0, 1], written as the surface color of the product. */
-  parts: ReadonlyArray<{ name?: string; shapes: ArrayLike<ShapeId>; color?: Vec3 }>;
+  /** Colours: sRGB in [0, 1], written as surface colours. */
+  parts: ReadonlyArray<{ name?: string; shapes: ArrayLike<ShapeId> } & StepColors>;
   /**
    * `part` indexes `parts`; `matrix` is a row-major 3x4 rigid motion
    * [r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz].
    */
-  instances: ReadonlyArray<{ part: number; name?: string; matrix: ArrayLike<number> }>;
+  instances: ReadonlyArray<{ part: number; name?: string; matrix: ArrayLike<number>; color?: Vec3 }>;
 }
 
 export interface OcctKernelOptions {

@@ -285,6 +285,65 @@ describe('STEP assemblies', () => {
     expect(p.bbox[3]).toBeCloseTo(40, 6);
   });
 
+  it('writes and reads back product, shape, face and instance colours', () => {
+    const red: [number, number, number] = [0.8, 0.1, 0.1];
+    const blue: [number, number, number] = [0.1, 0.2, 0.9];
+    const grey: [number, number, number] = [0.5, 0.5, 0.5];
+    const near = (a: readonly number[] | undefined, b: readonly number[]) =>
+      expect(a?.every((v, i) => Math.abs(v - b[i]) < 2e-3)).toBe(true);
+
+    // A part of two bodies: the part grey, the second body blue, face 5 of the first red.
+    const box = ok(k.makeBox(10, 10, 10)).shape;
+    const far = ok(k.transform(ok(k.makeBox(5, 5, 5)).shape, [1, 0, 0, 20, 0, 1, 0, 0, 0, 0, 1, 0])).shape;
+    const bytes = ok(
+      k.exportStep([box, far], {
+        name: 'Two blocks',
+        color: grey,
+        shapeColors: [null, blue],
+        faceColors: [{ shape: 0, faces: [5], color: red }],
+      }),
+    ).bytes;
+    const text = new TextDecoder().decode(bytes);
+    expect(text).toContain('Two blocks');
+    const parts = ok(k.importStepParts(bytes)).parts;
+    expect(parts).toHaveLength(2);
+    const [big, small] = ok(k.properties(parts[0].shape)).volume > 500 ? parts : [parts[1], parts[0]];
+    near(big.color, grey);
+    near(small.color, blue);
+    expect(big.faceColors?.map((f) => f.face)).toEqual([5]);
+    near(big.faceColors?.[0].color, red);
+    expect(small.faceColors).toBeUndefined();
+    // Without options the plain writer runs, as before.
+    expect(ok(k.importStepParts(ok(k.exportStep([box])).bytes)).parts[0].color).toBeUndefined();
+
+    // In an assembly: part colours with a face colour, and one instance coloured over its part.
+    const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+    const moved = [1, 0, 0, 30, 0, 1, 0, 0, 0, 0, 1, 0];
+    const asm = ok(
+      k.exportStepAssembly({
+        name: 'Colours',
+        parts: [{ name: 'Block', shapes: [box], color: grey, faceColors: [{ shape: 0, faces: [1], color: red }] }],
+        instances: [
+          { part: 0, name: 'Block:1', matrix: I },
+          { part: 0, name: 'Block:2', matrix: moved, color: blue },
+        ],
+      }),
+    ).bytes;
+    const placed = ok(k.importStepParts(asm)).parts;
+    const one = placed.find((p) => p.name === 'Block:1');
+    const two = placed.find((p) => p.name === 'Block:2');
+    near(one?.color, grey);
+    expect(one?.faceColors?.map((f) => f.face)).toEqual([1]);
+    near(two?.color, blue);
+
+    const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? 'OK' : r.error?.code);
+    expect(code(k.exportStep([box], { faceColors: [{ shape: 0, faces: [6], color: red }] }))).toBe(
+      'INVALID_ARGUMENT',
+    );
+    expect(code(k.exportStep([box], { shapeColors: [red, red] }))).toBe('INVALID_ARGUMENT');
+    expect(code(k.exportStep([box], { color: [2, 0, 0] }))).toBe('INVALID_ARGUMENT');
+  });
+
   it('rejects bad assemblies', () => {
     const box = ok(k.makeBox(1, 1, 1)).shape;
     const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];

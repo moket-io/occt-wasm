@@ -11,6 +11,7 @@ const METHODS = [
   'makeBox',
   'makeCylinder',
   'makeVertex',
+  'helix',
   'subShape',
   'makeProfileFace',
   'makeWire',
@@ -39,6 +40,17 @@ const METHODS = [
   'importBrep',
   'exportStepAssembly',
 ];
+
+// Bindings take every argument; these pad trailing optional ones.
+const ARITY = {
+  helix: 6,
+  thickSolid: 4,
+  offsetShape: 3,
+  sweep: 3,
+  loft: 2,
+  exportStep: 2,
+  importStepParts: 2,
+};
 
 const SURFACES = ['plane', 'cylinder', 'cone', 'sphere', 'torus', 'bspline', 'other'];
 const CURVES = ['line', 'circle', 'ellipse', 'bspline', 'other'];
@@ -158,7 +170,9 @@ export async function createOcctKernel(options = {}) {
 
   for (const name of METHODS) {
     const fn = module[name];
+    const arity = ARITY[name] ?? 0;
     kernel[name] = (...args) => {
+      while (args.length < arity) args.push(undefined);
       try {
         return unpack(name, fn(...args));
       } catch (e) {

@@ -15,8 +15,13 @@
 
 namespace occtwasm {
 
-val exportStep(val shapes)
+val exportStep(val shapes, val options)
 {
+  // Names and colours go through XCAF; the plain writer stays the default.
+  if (!(options.isUndefined() || options.isNull()))
+  {
+    return exportStepColored(shapes, options);
+  }
   return guarded([&] {
     const std::vector<int> ids = toInts(shapes, "shapes");
     if (ids.empty())

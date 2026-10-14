@@ -36,6 +36,7 @@ val thickSolid(val shape, val faces, val offset, val options);
 val offsetShape(val shape, val offset, val options);
 val draft(val shape, val faces, val direction, val angle, val neutral);
 val sweep(val profile, val spine, val options);
+val helix(val axisOrigin, val axisDir, val radius, val pitch, val height, val options);
 val loft(val sections, val options);
 
 // Queries.
@@ -49,7 +50,9 @@ val distance(val a, val subA, val b, val subB);
 val project(val shapes, val view);
 
 // Exchange.
-val exportStep(val shapes);
+val exportStep(val shapes, val options);
+// exportStep with options: one product, its name and colours (assembly.cpp).
+val exportStepColored(val shapes, val options);
 val importStep(val bytes);
 val importStepParts(val bytes, val options);
 val exportBrep(val shape);

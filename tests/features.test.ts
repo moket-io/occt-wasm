@@ -353,3 +353,64 @@ describe('importStepParts', () => {
     expect(code(k.importStepParts(new TextEncoder().encode('not a step file')))).toBe('STEP_READ_FAILED');
   });
 });
+
+describe('helix', () => {
+  const R = 10;
+  const pitch = 4;
+  const turns = 5;
+  const length = turns * Math.hypot(2 * Math.PI * R, pitch);
+
+  it('builds a helix of the right length that ends above its start', () => {
+    const h = ok(k.helix([0, 0, 0], [0, 0, 1], R, pitch, turns * pitch));
+    const t = ok(k.topology(h.shape));
+    expect(t.edges).toHaveLength(1);
+    expect(relErr(t.edges[0].length, length)).toBeLessThan(1e-6);
+    const ends = t.vertices.map((v) => v.point);
+    const [a, b] = ends[0][2] < ends[1][2] ? ends : [ends[1], ends[0]];
+    expect(a[0]).toBeCloseTo(R, 6);
+    expect(a[1]).toBeCloseTo(0, 6);
+    expect(a[2]).toBeCloseTo(0, 6);
+    expect(b[0]).toBeCloseTo(R, 6);
+    expect(b[1]).toBeCloseTo(0, 6);
+    expect(b[2]).toBeCloseTo(turns * pitch, 6);
+    // Right-handed about +Z: a quarter turn in, it is on +Y.
+    const quarter = ok(k.helix([0, 0, 0], [0, 0, 1], R, pitch, pitch / 4));
+    const end = ok(k.topology(quarter.shape)).vertices.map((v) => v.point).find((p) => p[2] > 0.5);
+    expect(end?.[1]).toBeCloseTo(R, 6);
+    const left = ok(k.helix([0, 0, 0], [0, 0, 1], R, pitch, pitch / 4, { leftHanded: true }));
+    const leftEnd = ok(k.topology(left.shape)).vertices.map((v) => v.point).find((p) => p[2] > 0.5);
+    expect(leftEnd?.[1]).toBeCloseTo(-R, 6);
+  });
+
+  it('widens on a cone and starts on xDir', () => {
+    const taper = (10 * Math.PI) / 180;
+    const height = 20;
+    const h = ok(k.helix([0, 0, 0], [0, 0, 1], R, pitch, height, { taper, xDir: [0, 1, 0] }));
+    const points = ok(k.topology(h.shape)).vertices.map((v) => v.point);
+    const top = points.find((p) => p[2] > 1)!;
+    const bottom = points.find((p) => p[2] < 1)!;
+    expect(bottom[1]).toBeCloseTo(R, 6);
+    expect(Math.hypot(top[0], top[1])).toBeCloseTo(R + height * Math.tan(taper), 6);
+  });
+
+  it('sweeps a coil with the binormal along the axis (volume = area x length)', () => {
+    const a = 1;
+    const tangent = [0, 2 * Math.PI * R, pitch].map((v) => v / Math.hypot(2 * Math.PI * R, pitch));
+    const plane = { origin: [R, 0, 0], normal: tangent, xDir: [1, 0, 0] };
+    const profile = ok(k.makeProfileFace(plane, [circleLoop(0, 0, a)]));
+    const spine = ok(k.helix([0, 0, 0], [0, 0, 1], R, pitch, turns * pitch));
+    const s = ok(k.sweep(profile.shape, spine.shape, { orientation: 'binormal', binormal: [0, 0, 1] }));
+    const p = ok(k.properties(s.shape));
+    expect(p.valid).toBe(true);
+    expect(relErr(p.volume, Math.PI * a * a * length)).toBeLessThan(1e-4);
+    expect(p.bbox[5]).toBeCloseTo(turns * pitch + a * Math.cos(Math.atan2(pitch, 2 * Math.PI * R)), 3);
+  });
+
+  it('rejects bad helices', () => {
+    const code = (r: { ok: boolean; error?: { code: string } }) => (r.ok ? 'OK' : r.error?.code);
+    expect(code(k.helix([0, 0, 0], [0, 0, 1], 0, 1, 1))).toBe('INVALID_ARGUMENT');
+    expect(code(k.helix([0, 0, 0], [0, 0, 1], 1, 1, 1, { taper: 2 }))).toBe('INVALID_ARGUMENT');
+    expect(code(k.helix([0, 0, 0], [0, 0, 1], 1, 1, 1, { xDir: [0, 0, 1] }))).toBe('INVALID_ARGUMENT');
+    expect(code(k.helix([0, 0, 0], [0, 0, 1], 1, 1, 10, { taper: -0.5 }))).toBe('INVALID_ARGUMENT');
+  });
+});
