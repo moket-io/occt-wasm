@@ -70,6 +70,36 @@ Store& store()
   return instance;
 }
 
+// Gauss integration without a tolerance takes a fixed number of points over
+// the whole parameter range of an edge: exact on one polynomial span, not
+// across the knots of a B-spline (1e-5 relative off for a smooth cubic of
+// three spans, 0.5% with corners at the knots). Planar and swept faces bounded
+// by such edges, as sketch splines make them, are integrated adaptively.
+constexpr double kSplineEps = 1e-10;
+
+bool acrossSplineKnots(const TopoDS_Face& face)
+{
+  const GeomAbs_SurfaceType type = BRepAdaptor_Surface(face, false).GetType();
+  if (type != GeomAbs_Plane && type != GeomAbs_SurfaceOfExtrusion && type != GeomAbs_SurfaceOfRevolution)
+  {
+    return false;
+  }
+  for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next())
+  {
+    const TopoDS_Edge& edge = TopoDS::Edge(ex.Current());
+    if (BRep_Tool::Degenerated(edge))
+    {
+      continue;
+    }
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.GetType() == GeomAbs_BSplineCurve && curve.NbKnots() > 2)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Outward normal at the middle of the face parameter range.
 gp_Dir forwardNormal(const TopoDS_Face& face)
 {
@@ -86,7 +116,14 @@ FaceData computeFace(const TopoDS_Face& any)
   const BRepAdaptor_Surface surf(face);
   FaceData                  d;
   d.surface = static_cast<int>(surf.GetType());
-  BRepGProp::SurfaceProperties(face, d.area);
+  if (acrossSplineKnots(face))
+  {
+    BRepGProp::SurfaceProperties(face, d.area, kSplineEps);
+  }
+  else
+  {
+    BRepGProp::SurfaceProperties(face, d.area);
+  }
   d.normal = forwardNormal(face);
   BRepBndLib::AddOptimal(face, d.box, false, false);
   switch (surf.GetType())
@@ -174,7 +211,14 @@ GProp_GProps computeVolume(const TopoDS_Face& face)
   {
     BRepGProp_Domain BD;
     BD.Init(face);
-    G.Perform(BF, BD);
+    if (acrossSplineKnots(face))
+    {
+      G.Perform(BF, BD, kSplineEps);
+    }
+    else
+    {
+      G.Perform(BF, BD);
+    }
   }
   return G;
 }
