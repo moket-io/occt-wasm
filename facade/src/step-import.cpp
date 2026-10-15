@@ -1,5 +1,6 @@
 // STEP import through XCAF: one result per solid with the names and colors
-// from the file, open shells apart, units and optional healing.
+// from the file, open shells apart, units and optional healing, and the
+// assembly structure (products, instances and their placements).
 //
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
@@ -21,6 +22,7 @@
 #include <TCollection_AsciiString.hxx>
 #include <TCollection_ExtendedString.hxx>
 #include <TDF_Label.hxx>
+#include <TDF_Tool.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopExp_Explorer.hxx>
@@ -28,8 +30,10 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Shell.hxx>
+#include <gp_Trsf.hxx>
 #include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_GraphNode.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
 
 #include <algorithm>
@@ -45,8 +49,10 @@ struct Leaf
 {
   TDF_Label                product;  // the shape's own label (names, colors)
   TDF_Label                instance; // the component that placed it, if any
-  TopLoc_Location          location;
+  TopLoc_Location          location; // from the root, the components' locations composed
   std::vector<std::string> path;     // instance names from the root down
+  std::vector<TDF_Label>   chain;    // the components from the root down, `instance` last
+  TDF_Label                root;     // the free shape it was found under
 };
 
 std::string nameOf(const TDF_Label& label)
@@ -65,11 +71,35 @@ std::string nameOf(const TDF_Label& label)
   return out;
 }
 
-void collect(const TDF_Label&                  label,
-             const TDF_Label&                  instance,
-             const TopLoc_Location&            location,
-             std::vector<std::string>          path,
-             std::vector<Leaf>&                leaves)
+std::string entryOf(const TDF_Label& label)
+{
+  TCollection_AsciiString entry;
+  TDF_Tool::Entry(label, entry);
+  return entry.ToCString();
+}
+
+// Row-major 3x4, as gp_Trsf::SetValues reads it.
+val matrixToJs(const TopLoc_Location& location)
+{
+  const gp_Trsf trsf = location.Transformation();
+  val           m    = val::array();
+  for (int r = 1; r <= 3; ++r)
+  {
+    for (int c = 1; c <= 4; ++c)
+    {
+      m.set((r - 1) * 4 + (c - 1), trsf.Value(r, c));
+    }
+  }
+  return m;
+}
+
+void collect(const TDF_Label&         label,
+             const TDF_Label&         instance,
+             const TopLoc_Location&   location,
+             std::vector<std::string> path,
+             std::vector<TDF_Label>   chain,
+             const TDF_Label&         root,
+             std::vector<Leaf>&       leaves)
 {
   if (XCAFDoc_ShapeTool::IsAssembly(label))
   {
@@ -82,15 +112,62 @@ void collect(const TDF_Label&                  label,
       TDF_Label        referred;
       if (XCAFDoc_ShapeTool::GetReferredShape(component, referred))
       {
+        std::vector<TDF_Label> below = chain;
+        below.push_back(component);
         collect(referred, component, location * XCAFDoc_ShapeTool::GetLocation(component), path,
-                leaves);
+                below, root, leaves);
       }
     }
     return;
   }
-  leaves.push_back(Leaf{label, instance, location, path});
+  leaves.push_back(Leaf{label, instance, location, path, chain, root});
 }
 
+// The components from the root down to the part, each with the product it
+// places and its own location in its parent.
+val instancesToJs(const Leaf& leaf)
+{
+  val out = val::array();
+  for (size_t i = 0; i < leaf.chain.size(); ++i)
+  {
+    const TDF_Label& component = leaf.chain[i];
+    TDF_Label        referred;
+    XCAFDoc_ShapeTool::GetReferredShape(component, referred);
+    const std::string product = nameOf(referred);
+    const std::string own     = nameOf(component);
+    val               entry   = val::object();
+    entry.set("id", entryOf(component));
+    entry.set("product", entryOf(referred));
+    entry.set("name", own.empty() ? product : own);
+    entry.set("productName", product);
+    entry.set("matrix", matrixToJs(XCAFDoc_ShapeTool::GetLocation(component)));
+    out.set(i, entry);
+  }
+  return out;
+}
+
+// A colour for the occurrence along `chain` (a SHUO, as readers store
+// colours of nested instances), the longest path first.
+bool occurrenceColorOf(const std::vector<TDF_Label>& chain, XCAFDoc_ColorType type, Quantity_Color& color)
+{
+  for (size_t n = chain.size(); n >= 2; --n)
+  {
+    NCollection_Sequence<TDF_Label> labels;
+    for (size_t i = 0; i < n; ++i)
+    {
+      labels.Append(chain[i]);
+    }
+    occ::handle<XCAFDoc_GraphNode> shuo;
+    if (XCAFDoc_ShapeTool::FindSHUO(labels, shuo) && XCAFDoc_ColorTool::GetColor(shuo->Label(), type, color))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The solid's own colour, then the occurrence's, the instance's, the
+// product's, and last the instances of the assemblies above, inner first.
 bool colorOf(const occ::handle<XCAFDoc_ColorTool>& colors,
              const TopoDS_Shape&                   shape,
              const Leaf&                           leaf,
@@ -99,10 +176,21 @@ bool colorOf(const occ::handle<XCAFDoc_ColorTool>& colors,
   for (XCAFDoc_ColorType type : {XCAFDoc_ColorSurf, XCAFDoc_ColorGen})
   {
     if (colors->GetColor(shape, type, color) || colors->GetColor(shape.Located(TopLoc_Location()), type, color)
+        || occurrenceColorOf(leaf.chain, type, color)
         || (!leaf.instance.IsNull() && XCAFDoc_ColorTool::GetColor(leaf.instance, type, color))
         || XCAFDoc_ColorTool::GetColor(leaf.product, type, color))
     {
       return true;
+    }
+  }
+  for (size_t i = leaf.chain.size(); i-- > 1;)
+  {
+    for (XCAFDoc_ColorType type : {XCAFDoc_ColorSurf, XCAFDoc_ColorGen})
+    {
+      if (XCAFDoc_ColorTool::GetColor(leaf.chain[i - 1], type, color))
+      {
+        return true;
+      }
     }
   }
   return false;
@@ -110,13 +198,13 @@ bool colorOf(const occ::handle<XCAFDoc_ColorTool>& colors,
 
 // A face's own colour: on its sub-shape label in the product, found by the
 // face in product coordinates (or as it is, for files that colour placed
-// faces).
+// faces). `placement` is the location the part was moved by.
 bool faceColorOf(const occ::handle<XCAFDoc_ColorTool>& colors,
                  const TopoDS_Shape&                   face,
-                 const Leaf&                           leaf,
+                 const TopLoc_Location&                placement,
                  Quantity_Color&                       color)
 {
-  const TopoDS_Shape inProduct = face.Moved(leaf.location.Inverted());
+  const TopoDS_Shape inProduct = face.Moved(placement.Inverted());
   for (XCAFDoc_ColorType type : {XCAFDoc_ColorSurf, XCAFDoc_ColorGen})
   {
     if (colors->GetColor(inProduct, type, color) || colors->GetColor(face, type, color))
@@ -187,6 +275,10 @@ val importStepParts(val bytes, val options)
     {
       fail("INVALID_ARGUMENT", "options.tolerance must be positive");
     }
+    // Shapes in their product's coordinates, placed by `matrix`.
+    const bool local = hasOptions && !(options["local"].isUndefined() || options["local"].isNull())
+                         ? options["local"].as<bool>()
+                         : false;
 
     std::istringstream    is(toBytes(bytes, "bytes"));
     STEPCAFControl_Reader reader;
@@ -220,18 +312,22 @@ val importStepParts(val bytes, val options)
     std::vector<Leaf> leaves;
     for (int i = 1; i <= roots.Length(); ++i)
     {
-      collect(roots(i), TDF_Label(), TopLoc_Location(), {}, leaves);
+      collect(roots(i), TDF_Label(), TopLoc_Location(), {}, {}, roots(i), leaves);
     }
 
     val parts = val::array();
     int n = 0, solids = 0, open = 0, healed = 0;
     for (const Leaf& leaf : leaves)
     {
-      const TopoDS_Shape located = XCAFDoc_ShapeTool::GetShape(leaf.product).Moved(leaf.location);
+      const TopLoc_Location placement = local ? TopLoc_Location() : leaf.location;
+      const TopoDS_Shape    located   = XCAFDoc_ShapeTool::GetShape(leaf.product).Moved(placement);
       if (located.IsNull())
       {
         continue;
       }
+      const std::string productId = entryOf(leaf.product);
+      const std::string rootId    = entryOf(leaf.root);
+      const std::string rootName  = nameOf(leaf.root);
       // Solids first, then shells and faces outside any solid.
       std::vector<std::pair<TopoDS_Shape, TopoDS_Shape>> found; // original, result
       for (TopExp_Explorer it(located, TopAbs_SOLID); it.More(); it.Next())
@@ -290,6 +386,13 @@ val importStepParts(val bytes, val options)
           path.set(i, leaf.path[i]);
         }
         part.set("path", path);
+        part.set("matrix", matrixToJs(leaf.location));
+        part.set("productId", productId);
+        part.set("instances", instancesToJs(leaf));
+        val root = val::object();
+        root.set("id", rootId);
+        root.set("name", rootName);
+        part.set("root", root);
         Quantity_Color color;
         const bool     hasColor = colorOf(colors, original, leaf, color);
         if (hasColor)
@@ -303,7 +406,7 @@ val importStepParts(val bytes, val options)
         for (int f = 1; f <= faces.Extent(); ++f)
         {
           Quantity_Color own;
-          if (faceColorOf(colors, faces(f), leaf, own) && (!hasColor || own.IsDifferent(color)))
+          if (faceColorOf(colors, faces(f), placement, own) && (!hasColor || own.IsDifferent(color)))
           {
             val entry = val::object();
             entry.set("face", f - 1);

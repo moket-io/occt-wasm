@@ -1,6 +1,6 @@
 # occt-wasm API
 
-The module exports one ESM entry point, `dist/index.mjs`, with hand-written types in `dist/index.d.ts`. This document describes the API of facade version 0.1.0 (OCCT 8.0.1).
+The module exports one ESM entry point, `dist/index.mjs`, with hand-written types in `dist/index.d.ts`. This document describes the API of facade version 0.8.0 (OCCT 8.0.1).
 
 ```ts
 import { createOcctKernel } from '@moket/occt-wasm';
@@ -40,7 +40,7 @@ Without options the module resolves `occt-wasm.wasm` next to `occt-wasm.mjs` (`n
 
 | Call           | Result                                                           |
 | -------------- | ---------------------------------------------------------------- |
-| `version()`    | `{ occt: '8.0.1', facade: '0.5.1', emscripten: '6.0.12' }`       |
+| `version()`    | `{ occt: '8.0.1', facade: '0.8.0', emscripten: '6.0.12' }`       |
 | `heapStats()`  | `{ heapBytes, usedBytes, liveShapes, cachedSubShapes }`          |
 | `release(id)`  | `Result<{}>`, `INVALID_HANDLE` if the id is unknown or released  |
 | `releaseAll()` | `Result<{ released: number }>`                                   |
@@ -266,7 +266,7 @@ exportStep(shapes: ShapeId[], options?: {
   faceColors?: { shape: number; faces: number[]; color: Vec3 }[]; // faces by topology() index of shapes[shape]
 }): Result<{ bytes: Uint8Array }>;
 importStep(bytes: Uint8Array | ArrayBuffer): Result<{ shape: ShapeId }>;
-importStepParts(bytes: Uint8Array | ArrayBuffer, options?: { heal?: boolean; tolerance?: number }): Result<{
+importStepParts(bytes: Uint8Array | ArrayBuffer, options?: { heal?: boolean; tolerance?: number; local?: boolean }): Result<{
   parts: {
     shape: ShapeId;
     type: ShapeType;             // 'solid', or 'shell' / 'face' / 'compound' when it does not close
@@ -277,6 +277,16 @@ importStepParts(bytes: Uint8Array | ArrayBuffer, options?: { heal?: boolean; tol
     path: string[];              // assemblies above it from the root down
     color?: [number, number, number]; // sRGB in [0, 1]
     faceColors?: { face: number; color: [number, number, number] }[]; // faces whose colour differs from color
+    matrix: number[];            // placement from the root, row-major 3x4 (0.8.0)
+    productId: string;           // XCAF label entry of the product, shared by its instances
+    instances: {                 // components from the root down, the part's own last; [] outside an assembly
+      id: string;                // component label entry
+      product: string;           // entry of the part or assembly it places
+      name: string;              // instance name, or the product name when it has none
+      productName: string;
+      matrix: number[];          // its own placement in its parent, row-major 3x4
+    }[];
+    root: { id: string; name: string }; // the free shape it was found under
   }[];
   units: string[];               // length units in the file, lower case: 'millimetre', 'inch'
   solids: number;
@@ -289,13 +299,18 @@ exportStepAssembly(assembly: {
   name?: string;
   parts: { name?: string; shapes: ShapeId[]; color?: Vec3; shapeColors?: (Vec3 | null)[];
            faceColors?: { shape: number; faces: number[]; color: Vec3 }[] }[];
-  instances: { part: number; name?: string; matrix: number[]; color?: Vec3 }[]; // row-major 3x4
+  assemblies?: { name?: string; instances: Instance[] }[];  // sub-assemblies (0.8.0)
+  instances: Instance[];                                     // the root's
 }): Result<{ bytes: Uint8Array }>;
+// Exactly one of part (into parts) and assembly (into assemblies); matrix row-major 3x4.
+type Instance = { part?: number; assembly?: number; name?: string; matrix: number[]; color?: Vec3 };
 ```
 
 - STEP goes through in-memory streams (`STEPControl_Writer::WriteStream`, `STEPControl_Reader::ReadStream`), AP214, millimetres. Several shapes are written as several roots; on import several roots come back as one compound.
 - `exportStepAssembly` builds an XCAF document (`XCAFDoc_ShapeTool`): every part is one product (its shapes as a compound when there are several), every instance a component of the root at a rigid placement, with part and instance names (UTF-8) written as product and occurrence names (`STEPCAFControl_Writer`, name mode on). Readers that ignore the structure, `importStep` included, get every instance in place.
+- Nested assemblies (0.8.0): every entry of `assemblies` is one more product (`XCAFDoc_ShapeTool::NewShape`, named) whose `instances` place parts or other assemblies, earlier or later in the list, like the root's; an instance has exactly one of `part` and `assembly`, in range. Every assembly label is created before any component is added, and `UpdateAssemblies` builds the compounds at the end. An assembly with no instances, or one that contains itself directly or through others (`assemblies contain themselves`), is `INVALID_ARGUMENT`. An instance `color` on an assembly instance goes on its component label like a part instance's. An assembly no instance places is written as one more root, like a part no instance places. Input without `assemblies` writes the same file as before.
 - `importStepParts` reads through XCAF (`STEPCAFControl_Reader`, names and colors on, layers, properties, GD&T, materials and views off) and walks the assembly tree: every solid of every placed product is one part, in place and in millimetres whatever unit the file uses. Shells outside solids and loose faces are parts of their own. With `heal` (default) those are sewn (`BRepBuilderAPI_Sewing`, `tolerance`, default 1e-3 mm) and become solids when they close, and parts that fail `BRepCheck` go through `ShapeFix_Shape`; `healed` marks either. Colors are looked up on the solid, then the instance, then the product, surface color before generic.
+- Structure (0.8.0): every part also gets `matrix`, its placement from the file's root (the components' `XCAFDoc_ShapeTool::GetLocation` composed, `gp_Trsf` row-major 3x4 as `exportStepAssembly` reads it, so a matrix read here writes the same placement there), `productId`, the `TDF_Tool::Entry` of its product label (equal for all instances of a product within one import, not stable across imports), `instances`, the components from the root down with the part's own last (each with its label entry, the entry of what it places, the instance and product names and its own location in its parent; their matrices composed give `matrix`), and `root`, the free shape it was found under (for a part outside an assembly, its product). With `local: true` the shapes stay in their product's coordinates (`matrix` applied to `shape` gives the shape `local: false` returns), so a caller can make one part per `productId` and place each instance by `matrix`; healing, colours and `faceColors` work the same. Colours of nested instances are also looked up on the occurrence (an XCAF SHUO along `instances`, the longest path first) before the part's own instance, and after the product on the instances of the assemblies above it, inner first.
 - Colours (0.7.0): `exportStep` with options and `exportStepAssembly` write a product's `color`, each shape's of `shapeColors` (on its sub-shape label when the product is a compound) and `faceColors` (on face sub-shape labels, faces by `TopExp::MapShapes` index of that shape) as surface colours through XCAF (`XCAFDoc_ColorTool`, `STEPCAFControl_Writer` colour mode on); an instance's `color` goes on its component label and wins over the product for that instance. `exportStep` without options keeps the plain writer. `importStepParts` returns `faceColors` for faces whose own colour (looked up in product coordinates, then as placed) differs from the part's `color`, by `topology()` index of the returned shape; faces of healed parts may have none.
 - `exportBrep` writes the binary BRep format (`BinTools`, without triangulation). `importBrep` reads binary or text BRep. A BRep round trip is exact and keeps the sub-shape order, so it is suitable for caching results with their history indices.
 

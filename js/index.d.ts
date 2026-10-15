@@ -342,6 +342,11 @@ export interface StepImportOptions {
   heal?: boolean;
   /** Sewing and healing tolerance, mm. Default 1e-3. */
   tolerance?: number;
+  /**
+   * Shapes in their product's own coordinates, not placed: one shape per
+   * product, placed by `matrix`. Default false (shapes in place).
+   */
+  local?: boolean;
 }
 
 export interface HelixOptions {
@@ -385,6 +390,30 @@ export interface StepPart {
   color?: [number, number, number];
   /** Faces whose colour differs from `color`, by index in TopExp::MapShapes order of `shape`. */
   faceColors?: { face: number; color: [number, number, number] }[];
+  /**
+   * Placement from the file's root, a row-major 3x4 rigid motion as
+   * exportStepAssembly reads it: the instances' matrices composed.
+   */
+  matrix: number[];
+  /** The product (XCAF label entry, e.g. '0:1:1:3'), the same for all its instances in one import. */
+  productId: string;
+  /** The instances from the root down to this part, its own last; empty outside an assembly. */
+  instances: StepInstanceRef[];
+  /** The free shape (root) the part was found under. */
+  root: { id: string; name: string };
+}
+
+/** One instance (XCAF component) on the way from the root to a part. */
+export interface StepInstanceRef {
+  /** The component's label entry. */
+  id: string;
+  /** Label entry of the product (part or assembly) it places. */
+  product: string;
+  /** Instance name, or the product's name when the instance has none. */
+  name: string;
+  productName: string;
+  /** Its own placement in its parent, row-major 3x4. */
+  matrix: number[];
 }
 
 export type StepPartsResult = Result<{
@@ -596,9 +625,24 @@ export interface OcctKernel {
   importBrep(bytes: Uint8Array | ArrayBuffer): ShapeResult;
   /**
    * STEP of an assembly through XCAF: one product per part (a compound when
-   * a part has several shapes), placed by named instances under one root.
+   * a part has several shapes) and per sub-assembly, placed by named
+   * instances under one root.
    */
   exportStepAssembly(assembly: StepAssembly): BytesResult;
+}
+
+/**
+ * A part or a sub-assembly placed in its parent: exactly one of `part`
+ * (indexes `parts`) and `assembly` (indexes `assemblies`). `matrix` is a
+ * row-major 3x4 rigid motion [r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz].
+ */
+export interface StepAssemblyInstance {
+  part?: number;
+  assembly?: number;
+  name?: string;
+  matrix: ArrayLike<number>;
+  /** Wins over the colours of what it places, for this instance. */
+  color?: Vec3;
 }
 
 export interface StepAssembly {
@@ -606,11 +650,10 @@ export interface StepAssembly {
   name?: string;
   /** Colours: sRGB in [0, 1], written as surface colours. */
   parts: ReadonlyArray<{ name?: string; shapes: ArrayLike<ShapeId> } & StepColors>;
-  /**
-   * `part` indexes `parts`; `matrix` is a row-major 3x4 rigid motion
-   * [r11 r12 r13 tx r21 r22 r23 ty r31 r32 r33 tz].
-   */
-  instances: ReadonlyArray<{ part: number; name?: string; matrix: ArrayLike<number>; color?: Vec3 }>;
+  /** Sub-assemblies, one product each; they may place each other, but not themselves. */
+  assemblies?: ReadonlyArray<{ name?: string; instances: ReadonlyArray<StepAssemblyInstance> }>;
+  /** The root's instances. */
+  instances: ReadonlyArray<StepAssemblyInstance>;
 }
 
 export interface OcctKernelOptions {

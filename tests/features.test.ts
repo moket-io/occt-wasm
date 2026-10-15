@@ -354,6 +354,255 @@ describe('importStepParts', () => {
   });
 });
 
+describe('STEP assembly structure (0.8.0)', () => {
+  type M = number[];
+  const I: M = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+  const T = (x: number, y: number, z: number): M => [1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z];
+  /** a after b: the placement of b inside a, both row-major 3x4. */
+  const mul = (a: M, b: M): M => {
+    const r: M = [];
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 4; j++) {
+        let v = 0;
+        for (let l = 0; l < 3; l++) v += a[i * 4 + l] * b[l * 4 + j];
+        r.push(j === 3 ? v + a[i * 4 + 3] : v);
+      }
+    }
+    return r;
+  };
+  const close = (a: readonly number[] | undefined, b: readonly number[], tol: number) => {
+    expect(a).toHaveLength(b.length);
+    a!.forEach((v, i) => expect(Math.abs(v - b[i])).toBeLessThan(tol));
+  };
+  const near = (a: readonly number[] | undefined, b: readonly number[]) =>
+    expect(a !== undefined && a.every((v, i) => Math.abs(v - b[i]) < 2e-3)).toBe(true);
+  const red: [number, number, number] = [0.8, 0.1, 0.1];
+  const blue: [number, number, number] = [0.1, 0.2, 0.9];
+  const green: [number, number, number] = [0.1, 0.7, 0.2];
+
+  it('round-trips a sub-assembly placed twice, part by part in product coordinates', () => {
+    const base = ok(k.makeBox(40, 30, 5)).shape;
+    const pin = ok(k.makeCylinder([0, 0, 0], [0, 0, 1], 2, 10)).shape;
+    const washer = ok(k.makeBox(6, 4, 1)).shape;
+    const pinFace = ok(k.topology(pin)).faces[1];
+    const pinAt = T(1, 2, 3);
+    const washerAt = [0, -1, 0, 5, 1, 0, 0, 0, 0, 0, 1, 0]; // a quarter turn about Z
+    const sub1 = T(10, 10, 5);
+    const sub2 = [1, 0, 0, 30, 0, 0, -1, 20, 0, 1, 0, 5]; // a quarter turn about X
+    const bytes = ok(
+      k.exportStepAssembly({
+        name: 'Top',
+        parts: [
+          { name: 'Base', shapes: [base] },
+          { name: 'Pin', shapes: [pin], faceColors: [{ shape: 0, faces: [1], color: red }] },
+          { name: 'Washer', shapes: [washer] },
+        ],
+        assemblies: [
+          {
+            name: 'Sub',
+            instances: [
+              { part: 1, name: 'Pin:1', matrix: pinAt },
+              { part: 2, name: 'Washer:1', matrix: washerAt, color: blue },
+            ],
+          },
+        ],
+        instances: [
+          { part: 0, name: 'Base:1', matrix: I },
+          { assembly: 0, name: 'Sub:1', matrix: sub1 },
+          { assembly: 0, name: 'Sub:2', matrix: sub2, color: green },
+        ],
+      }),
+    ).bytes;
+    const text = new TextDecoder().decode(bytes);
+    // Root, Sub, Base, Pin, Washer; Base:1, Sub:1, Sub:2, Pin:1, Washer:1.
+    expect(text.match(/=\s*PRODUCT\(/g)).toHaveLength(5);
+    expect(text.match(/NEXT_ASSEMBLY_USAGE_OCCURRENCE/g)).toHaveLength(5);
+
+    const placed = ok(k.importStepParts(bytes));
+    const local = ok(k.importStepParts(bytes, { local: true }));
+    expect(placed).toMatchObject({ solids: 5, open: 0, healed: 0 });
+    expect(local).toMatchObject({ solids: 5, open: 0, healed: 0 });
+    const key = (p: { instances: { name: string }[] }) => p.instances.map((i) => i.name).join('/');
+    const keys = ['Base:1', 'Sub:1/Pin:1', 'Sub:1/Washer:1', 'Sub:2/Pin:1', 'Sub:2/Washer:1'];
+    const P = Object.fromEntries(placed.parts.map((p) => [key(p), p]));
+    const L = Object.fromEntries(local.parts.map((p) => [key(p), p]));
+    expect(Object.keys(P).sort()).toEqual(keys);
+    expect(Object.keys(L).sort()).toEqual(keys);
+
+    // Names along the chains, three levels: the root, Sub, the part.
+    expect(L['Base:1'].instances.map((i) => i.productName)).toEqual(['Base']);
+    expect(L['Sub:2/Pin:1'].instances.map((i) => i.productName)).toEqual(['Sub', 'Pin']);
+    expect(L['Sub:1/Washer:1'].instances.map((i) => i.productName)).toEqual(['Sub', 'Washer']);
+    expect(L['Sub:2/Washer:1']).toMatchObject({ name: 'Washer:1', product: 'Washer', path: ['Top', 'Sub:2'] });
+    for (const p of local.parts) {
+      expect(p.root.name).toBe('Top');
+      expect(p.root.id).toBe(local.parts[0].root.id);
+      expect(p.productId).toBe(p.instances.at(-1)!.product);
+      expect(p.productId).not.toBe(p.root.id);
+    }
+    // Both instances of Sub place the same product; each part's product is shared by its instances.
+    const sub = L['Sub:1/Pin:1'].instances[0];
+    expect(L['Sub:2/Washer:1'].instances[0].product).toBe(sub.product);
+    expect(L['Sub:1/Washer:1'].instances[0].id).toBe(sub.id);
+    expect(L['Sub:2/Pin:1'].instances[0].id).not.toBe(sub.id);
+    expect(L['Sub:2/Pin:1'].productId).toBe(L['Sub:1/Pin:1'].productId);
+    expect(L['Sub:2/Washer:1'].productId).toBe(L['Sub:1/Washer:1'].productId);
+    expect(new Set([sub.product, L['Base:1'].productId, L['Sub:1/Pin:1'].productId, L['Sub:1/Washer:1'].productId]).size).toBe(4);
+
+    // Placements: the chain composed is `matrix`, which is what was written.
+    const expected: Record<string, M> = {
+      'Base:1': I,
+      'Sub:1/Pin:1': mul(sub1, pinAt),
+      'Sub:1/Washer:1': mul(sub1, washerAt),
+      'Sub:2/Pin:1': mul(sub2, pinAt),
+      'Sub:2/Washer:1': mul(sub2, washerAt),
+    };
+    const volumes: Record<string, number> = {
+      Base: ok(k.properties(base)).volume,
+      Pin: ok(k.properties(pin)).volume,
+      Washer: ok(k.properties(washer)).volume,
+    };
+    for (const name of keys) {
+      const l = L[name];
+      const p = P[name];
+      close(l.instances.map((i) => i.matrix).reduce(mul), l.matrix, 1e-9);
+      close(l.matrix, expected[name], 1e-9);
+      close(p.matrix, l.matrix, 1e-12);
+      expect(p.productId).toBe(l.productId);
+      expect(p.instances.map((i) => i.id)).toEqual(l.instances.map((i) => i.id));
+      // `matrix` moves the local shape onto the placed one.
+      const moved = ok(k.properties(ok(k.transform(l.shape, l.matrix)).shape));
+      const there = ok(k.properties(p.shape));
+      close(moved.bbox, there.bbox, 1e-6);
+      close(moved.centroid, there.centroid, 1e-6);
+      expect(relErr(ok(k.properties(l.shape)).volume, volumes[l.product])).toBeLessThan(1e-6);
+    }
+    // Local shapes are where their product has them.
+    close(ok(k.properties(L['Sub:2/Washer:1'].shape)).bbox, [0, 0, 0, 6, 4, 1], 1e-6);
+    close(ok(k.properties(P['Sub:1/Washer:1'].shape)).bbox, [11, 10, 5, 15, 16, 6], 1e-6);
+
+    // Colours in both modes: the washer's instance colour, the pin's face
+    // colour, and Sub:2's instance colour on the pin under it.
+    for (const parts of [P, L]) {
+      near(parts['Sub:1/Washer:1'].color, blue);
+      near(parts['Sub:2/Washer:1'].color, blue);
+      expect(parts['Sub:1/Pin:1'].color).toBeUndefined();
+      near(parts['Sub:2/Pin:1'].color, green);
+      expect(parts['Base:1'].color).toBeUndefined();
+      for (const pinName of ['Sub:1/Pin:1', 'Sub:2/Pin:1']) {
+        const faces = parts[pinName].faceColors!;
+        expect(faces).toHaveLength(1);
+        near(faces[0].color, red);
+        expect(ok(k.topology(parts[pinName].shape)).faces[faces[0].face].area).toBeCloseTo(pinFace.area, 6);
+      }
+    }
+  });
+
+  it('places assemblies listed after the one that uses them', () => {
+    const box = ok(k.makeBox(2, 3, 4)).shape;
+    const bytes = ok(
+      k.exportStepAssembly({
+        name: 'Root',
+        parts: [{ name: 'Box', shapes: [box] }],
+        assemblies: [
+          { name: 'Outer', instances: [{ assembly: 1, name: 'Inner:1', matrix: T(0, 10, 0) }] },
+          { name: 'Inner', instances: [{ part: 0, name: 'Box:1', matrix: T(0, 0, 100) }] },
+        ],
+        instances: [{ assembly: 0, name: 'Outer:1', matrix: T(1000, 0, 0) }],
+      }),
+    ).bytes;
+    const parts = ok(k.importStepParts(bytes, { local: true })).parts;
+    expect(parts).toHaveLength(1);
+    expect(parts[0].instances.map((i) => i.name)).toEqual(['Outer:1', 'Inner:1', 'Box:1']);
+    expect(parts[0].instances.map((i) => i.productName)).toEqual(['Outer', 'Inner', 'Box']);
+    close(parts[0].matrix, T(1000, 10, 100), 1e-9);
+    close(ok(k.properties(parts[0].shape)).bbox, [0, 0, 0, 2, 3, 4], 1e-6);
+  });
+
+  it('gives flat assemblies chains of one and free shapes none', () => {
+    const plate = ok(k.makeBox(40, 30, 5)).shape;
+    const pin = ok(k.makeCylinder([0, 0, 0], [0, 0, 1], 2, 10)).shape;
+    const bytes = ok(
+      k.exportStepAssembly({
+        name: 'Fixture',
+        parts: [
+          { name: 'Plate', shapes: [plate] },
+          { name: 'Pin', shapes: [pin] },
+        ],
+        instances: [
+          { part: 0, name: 'Plate:1', matrix: I },
+          { part: 1, name: 'Pin:1', matrix: T(10, 10, 5) },
+          { part: 1, name: 'Pin:2', matrix: T(30, 20, 5) },
+        ],
+      }),
+    ).bytes;
+    for (const local of [false, true]) {
+      const parts = ok(k.importStepParts(bytes, { local })).parts;
+      expect(parts).toHaveLength(3);
+      for (const p of parts) {
+        expect(p.instances).toHaveLength(1);
+        expect(p.root.name).toBe('Fixture');
+        expect(p.instances[0].product).toBe(p.productId);
+        close(p.instances[0].matrix, p.matrix, 1e-12);
+      }
+      const pins = parts.filter((p) => p.product === 'Pin');
+      expect(pins.map((p) => p.instances[0].name).sort()).toEqual(['Pin:1', 'Pin:2']);
+      expect(pins[0].productId).toBe(pins[1].productId);
+      const one = pins.find((p) => p.instances[0].name === 'Pin:1')!;
+      close(one.matrix, T(10, 10, 5), 1e-9);
+      const box = ok(k.properties(one.shape)).bbox;
+      close(box, local ? [-2, -2, 0, 2, 2, 10] : [8, 8, 5, 12, 12, 15], 1e-6);
+    }
+    // Default import: as before, in place.
+    const placed = ok(k.importStepParts(bytes)).parts.find((p) => p.name === 'Pin:1')!;
+    close(ok(k.properties(placed.shape)).bbox, [8, 8, 5, 12, 12, 15], 1e-6);
+
+    const free = ok(k.importStepParts(ok(k.exportStep([ok(k.makeBox(1, 2, 3)).shape], { name: 'Block' })).bytes)).parts;
+    expect(free).toHaveLength(1);
+    expect(free[0].instances).toEqual([]);
+    expect(free[0].root).toEqual({ id: free[0].productId, name: 'Block' });
+    close(free[0].matrix, I, 1e-12);
+  });
+
+  it('rejects bad nested assemblies', () => {
+    const box = ok(k.makeBox(1, 1, 1)).shape;
+    const parts = [{ shapes: [box] }];
+    const leaf = { name: 'Leaf', instances: [{ part: 0, matrix: I }] };
+    const bad = (assembly: Parameters<OcctKernel['exportStepAssembly']>[0]) => code(k.exportStepAssembly(assembly));
+    // Both, neither, out of range.
+    expect(bad({ parts, assemblies: [leaf], instances: [{ part: 0, assembly: 0, matrix: I }] })).toBe('INVALID_ARGUMENT');
+    expect(bad({ parts, assemblies: [leaf], instances: [{ matrix: I }] })).toBe('INVALID_ARGUMENT');
+    expect(bad({ parts, assemblies: [leaf], instances: [{ assembly: 1, matrix: I }] })).toBe('INVALID_ARGUMENT');
+    expect(bad({ parts, instances: [{ assembly: 0, matrix: I }] })).toBe('INVALID_ARGUMENT');
+    expect(bad({ parts, assemblies: [{ instances: [{ part: 1, matrix: I }] }], instances: [{ assembly: 0, matrix: I }] })).toBe(
+      'INVALID_ARGUMENT',
+    );
+    expect(bad({ parts, assemblies: [{ instances: [{ matrix: I }] }], instances: [{ assembly: 0, matrix: I }] })).toBe(
+      'INVALID_ARGUMENT',
+    );
+    // Cycles, direct and through another assembly.
+    const self = k.exportStepAssembly({
+      parts,
+      assemblies: [{ instances: [{ part: 0, matrix: I }, { assembly: 0, matrix: T(5, 0, 0) }] }],
+      instances: [{ assembly: 0, matrix: I }],
+    });
+    expect(code(self)).toBe('INVALID_ARGUMENT');
+    if (!self.ok) expect(self.error.message).toBe('assemblies contain themselves');
+    expect(
+      bad({
+        parts,
+        assemblies: [{ instances: [{ assembly: 1, matrix: I }] }, { instances: [{ assembly: 0, matrix: I }, { part: 0, matrix: I }] }],
+        instances: [{ part: 0, matrix: I }],
+      }),
+    ).toBe('INVALID_ARGUMENT');
+    // An empty assembly, and one that is not an array.
+    expect(bad({ parts, assemblies: [leaf, { instances: [] }], instances: [{ assembly: 0, matrix: I }] })).toBe('INVALID_ARGUMENT');
+    expect(bad({ parts, assemblies: {} as never, instances: [{ part: 0, matrix: I }] })).toBe('INVALID_ARGUMENT');
+    // A valid nested input still writes.
+    expect(bad({ parts, assemblies: [leaf], instances: [{ assembly: 0, matrix: I }] })).toBe('OK');
+  });
+});
+
 describe('helix', () => {
   const R = 10;
   const pitch = 4;

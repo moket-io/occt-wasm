@@ -1,6 +1,6 @@
 // STEP export through XCAF: an assembly as one product per part, placed as
 // named instances, so other CAD systems see the structure and the names;
-// colours on products, shapes, faces and instances.
+// nested assemblies; colours on products, shapes, faces and instances.
 //
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
@@ -24,6 +24,7 @@
 
 #include <cmath>
 #include <sstream>
+#include <vector>
 
 namespace occtwasm {
 
@@ -194,23 +195,149 @@ val exportStepColored(val shapes, val options)
   });
 }
 
+namespace {
+
+// One instance: a part or an assembly placed in its parent.
+struct Use
+{
+  bool assembly = false;
+  int  index    = 0;
+  val  spec = val::undefined();
+};
+
+std::vector<Use> usesOf(const val& instances, const std::string& where, int partCount, int assemblyCount)
+{
+  if (!instances.isArray())
+  {
+    fail("INVALID_ARGUMENT", where + " must be an array");
+  }
+  const int count = instances["length"].as<int>();
+  if (count == 0)
+  {
+    fail("INVALID_ARGUMENT", where + " must not be empty");
+  }
+  std::vector<Use> uses;
+  for (int i = 0; i < count; ++i)
+  {
+    const val  instance   = instances[i];
+    const bool isPart     = given(instance["part"]);
+    const bool isAssembly = given(instance["assembly"]);
+    if (isPart == isAssembly)
+    {
+      fail("INVALID_ARGUMENT", where + "[] must have exactly one of part and assembly");
+    }
+    Use use;
+    use.assembly = isAssembly;
+    use.index    = isPart ? toInt(instance["part"], (where + "[].part").c_str())
+                          : toInt(instance["assembly"], (where + "[].assembly").c_str());
+    if (use.index < 0 || use.index >= (isPart ? partCount : assemblyCount))
+    {
+      fail("INVALID_ARGUMENT", where + (isPart ? "[].part" : "[].assembly") + " is out of range");
+    }
+    use.spec = instance;
+    uses.push_back(use);
+  }
+  return uses;
+}
+
+// Depth-first search for an assembly that contains itself: 1 on the path, 2 done.
+bool cyclic(int a, const std::vector<std::vector<Use>>& assemblies, std::vector<int>& state)
+{
+  if (state[static_cast<size_t>(a)] == 1)
+  {
+    return true;
+  }
+  if (state[static_cast<size_t>(a)] == 2)
+  {
+    return false;
+  }
+  state[static_cast<size_t>(a)] = 1;
+  for (const Use& use : assemblies[static_cast<size_t>(a)])
+  {
+    if (use.assembly && cyclic(use.index, assemblies, state))
+    {
+      return true;
+    }
+  }
+  state[static_cast<size_t>(a)] = 2;
+  return false;
+}
+
+void addComponents(const occ::handle<XCAFDoc_ShapeTool>& tool,
+                   const occ::handle<XCAFDoc_ColorTool>& colors,
+                   const TDF_Label&                      parent,
+                   const std::vector<Use>&               uses,
+                   const std::vector<TDF_Label>&         products,
+                   const std::vector<TDF_Label>&         assemblies,
+                   const std::string&                    where)
+{
+  for (const Use& use : uses)
+  {
+    const std::vector<double> m = toDoubles(use.spec["matrix"], (where + "[].matrix").c_str(), 12);
+    gp_Trsf                   trsf;
+    trsf.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+    if (std::abs(trsf.ScaleFactor() - 1.0) > 1e-9)
+    {
+      fail("INVALID_ARGUMENT", where + "[].matrix must be a rigid motion");
+    }
+    const TDF_Label& referred = use.assembly ? assemblies[static_cast<size_t>(use.index)]
+                                             : products[static_cast<size_t>(use.index)];
+    const TDF_Label  component = tool->AddComponent(parent, referred, TopLoc_Location(trsf));
+    if (component.IsNull())
+    {
+      fail("STEP_WRITE_FAILED", "cannot add a component to " + where);
+    }
+    setName(component, stringOf(use.spec["name"], (where + "[].name").c_str()));
+    if (given(use.spec["color"]))
+    {
+      colors->SetColor(component, colorOf(use.spec["color"], (where + "[].color").c_str()), XCAFDoc_ColorSurf);
+    }
+  }
+}
+
+} // namespace
+
 val exportStepAssembly(val assembly)
 {
   return guarded([&] {
-    const val parts     = assembly["parts"];
-    const val instances = assembly["instances"];
-    if (!parts.isArray() || !instances.isArray())
+    const val parts = assembly["parts"];
+    if (!parts.isArray() || !assembly["instances"].isArray())
     {
       fail("INVALID_ARGUMENT", "parts and instances must be arrays");
     }
-    const int partCount     = parts["length"].as<int>();
-    const int instanceCount = instances["length"].as<int>();
-    if (partCount == 0 || instanceCount == 0)
+    const int partCount = parts["length"].as<int>();
+    if (partCount == 0)
     {
       fail("INVALID_ARGUMENT", "parts and instances must not be empty");
     }
+    const val nested        = assembly["assemblies"];
+    int       assemblyCount = 0;
+    if (given(nested))
+    {
+      if (!nested.isArray())
+      {
+        fail("INVALID_ARGUMENT", "assemblies must be an array");
+      }
+      assemblyCount = nested["length"].as<int>();
+    }
 
-    occ::handle<TDocStd_Document> doc = new TDocStd_Document("MDTV-XCAF");
+    // The structure first: indices, empty assemblies, cycles.
+    const std::vector<Use>        top = usesOf(assembly["instances"], "instances", partCount, assemblyCount);
+    std::vector<std::vector<Use>> inside;
+    for (int a = 0; a < assemblyCount; ++a)
+    {
+      inside.push_back(usesOf(nested[a]["instances"], "assemblies[].instances", partCount, assemblyCount));
+    }
+    std::vector<int> state(static_cast<size_t>(assemblyCount), 0);
+    for (int a = 0; a < assemblyCount; ++a)
+    {
+      if (cyclic(a, inside, state))
+      {
+        fail("INVALID_ARGUMENT", "assemblies contain themselves");
+      }
+    }
+
+    occ::handle<TDocStd_Document>  doc    = new TDocStd_Document("MDTV-XCAF");
     occ::handle<XCAFDoc_ShapeTool> tool   = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
     occ::handle<XCAFDoc_ColorTool> colors = XCAFDoc_DocumentTool::ColorTool(doc->Main());
 
@@ -224,29 +351,22 @@ val exportStepAssembly(val assembly)
       products.push_back(addProduct(tool, colors, toInts(part["shapes"], "parts[].shapes"), part, "parts[]"));
     }
 
-    for (int i = 0; i < instanceCount; ++i)
+    // Every assembly label before any component, so instances can refer to
+    // earlier and later assemblies alike; the compounds come from
+    // UpdateAssemblies once everything is in place.
+    std::vector<TDF_Label> assemblies;
+    for (int a = 0; a < assemblyCount; ++a)
     {
-      const val instance = instances[i];
-      const int part     = toInt(instance["part"], "instances[].part");
-      if (part < 0 || part >= partCount)
-      {
-        fail("INVALID_ARGUMENT", "instances[].part is out of range");
-      }
-      const std::vector<double> m = toDoubles(instance["matrix"], "instances[].matrix", 12);
-      gp_Trsf                   trsf;
-      trsf.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
-      if (std::abs(trsf.ScaleFactor() - 1.0) > 1e-9)
-      {
-        fail("INVALID_ARGUMENT", "instances[].matrix must be a rigid motion");
-      }
-      const TDF_Label component =
-        tool->AddComponent(root, products[static_cast<size_t>(part)], TopLoc_Location(trsf));
-      setName(component, stringOf(instance["name"], "instances[].name"));
-      if (given(instance["color"]))
-      {
-        colors->SetColor(component, colorOf(instance["color"], "instances[].color"), XCAFDoc_ColorSurf);
-      }
+      const TDF_Label label = tool->NewShape();
+      setName(label, stringOf(nested[a]["name"], "assemblies[].name"));
+      assemblies.push_back(label);
     }
+    for (int a = 0; a < assemblyCount; ++a)
+    {
+      addComponents(tool, colors, assemblies[static_cast<size_t>(a)], inside[static_cast<size_t>(a)], products,
+                    assemblies, "assemblies[].instances");
+    }
+    addComponents(tool, colors, root, top, products, assemblies, "instances");
     tool->UpdateAssemblies();
     return writeDocument(doc);
   });
