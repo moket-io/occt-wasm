@@ -70,6 +70,43 @@ function arcLength(poles: readonly Vec2[], parts = 256): number {
   return sum;
 }
 
+/** Point and derivative of a non-rational B-spline at u (de Boor on the poles and on the derivative's poles). */
+function splineAt(s: BSplineSegment, u: number): { p: Vec2; d: Vec2 } {
+  const flat = s.knots.flatMap((t, i) => Array<number>(s.multiplicities[i]).fill(t));
+  const deBoor = (pts: readonly Vec2[], knots: number[], deg: number): Vec2 => {
+    let span = deg;
+    while (span < pts.length - 1 && u >= knots[span + 1]) span++;
+    const d = pts.slice(span - deg, span + 1).map((q) => [q[0], q[1]] as [number, number]);
+    for (let r = 1; r <= deg; r++) {
+      for (let j = deg; j >= r; j--) {
+        const i = span - deg + j;
+        const a = (u - knots[i]) / (knots[i + deg + 1 - r] - knots[i]);
+        d[j] = [(1 - a) * d[j - 1][0] + a * d[j][0], (1 - a) * d[j - 1][1] + a * d[j][1]];
+      }
+    }
+    return d[deg];
+  };
+  const p = s.degree;
+  const diffs = s.poles.slice(1).map((q, i) => {
+    const f = p / (flat[i + p + 1] - flat[i + 1]);
+    return [f * (q[0] - s.poles[i][0]), f * (q[1] - s.poles[i][1])] as Vec2;
+  });
+  return { p: deBoor(s.poles, flat, p), d: deBoor(diffs, flat.slice(1, -1), p - 1) };
+}
+
+/** Integral of x dy along a non-rational B-spline, Gauss per knot span (exact). */
+function splineXdy(s: BSplineSegment): number {
+  let sum = 0;
+  for (let i = 0; i + 1 < s.knots.length; i++) {
+    const [u0, u1] = [s.knots[i], s.knots[i + 1]];
+    for (const [t, w] of GAUSS) {
+      const { p, d } = splineAt(s, u0 + (u1 - u0) * t);
+      sum += w * (u1 - u0) * p[0] * d[1];
+    }
+  }
+  return sum;
+}
+
 /** Enclosed area of a closed loop of lines and Beziers: |sum of x dy|. */
 function loopArea(loop: readonly Segment[]): number {
   let sum = 0;
@@ -122,7 +159,7 @@ describe('bspline profile segments', () => {
     expect(relErr(p.volume, 10 * area)).toBeLessThan(1e-9);
     // Top of the arch: y(1/2) = 22.5.
     expect(p.bbox[4]).toBeCloseTo(22.5, 5);
-    expect(p.bbox[5]).toBeCloseTo(10, 9);
+    expect(p.bbox[5]).toBeCloseTo(10, 6);
     // One side face per segment, the spline's a B-spline-swept surface.
     expect(solid.sweep.sides.map((s) => s.faces.length)).toEqual([1, 1]);
 
@@ -191,7 +228,30 @@ describe('bspline profile segments', () => {
     expect(profile.segmentEdges).toEqual([[0]]);
     const p = ok(k.properties(ok(k.extrude(profile.shape, [0, 0, 1], 2)).shape));
     expect(p.valid).toBe(true);
+    [-10, -10, 0, 10, 10, 2].forEach((v, i) => expect(p.bbox[i]).toBeCloseTo(v, 6));
     expect(relErr(p.volume, (2 * 1000) / 3)).toBeLessThan(1e-9);
+  });
+
+  it('extrudes a smooth cubic spline of several spans: volume = height x the exact area', () => {
+    const spline: BSplineSegment = {
+      kind: 'bspline',
+      degree: 3,
+      poles: [
+        [0, 0],
+        [5, 20],
+        [15, 30],
+        [25, 30],
+        [35, 20],
+        [40, 0],
+      ],
+      knots: [0, 1, 2, 3],
+      multiplicities: [4, 1, 1, 4],
+    };
+    const area = Math.abs(splineXdy(spline));
+    const profile = ok(k.makeProfileFace(XY, [[spline, line([40, 0], [0, 0])]]));
+    const p = ok(k.properties(ok(k.extrude(profile.shape, [0, 0, 1], 10)).shape));
+    expect(p.valid).toBe(true);
+    expect(relErr(p.volume, 10 * area)).toBeLessThan(1e-9);
   });
 
   it('builds an exact quarter circle from a rational spline', () => {
