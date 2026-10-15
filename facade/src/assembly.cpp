@@ -1,6 +1,7 @@
 // STEP export through XCAF: an assembly as one product per part, placed as
 // named instances, so other CAD systems see the structure and the names;
-// nested assemblies; colours on products, shapes, faces and instances.
+// nested assemblies; colours on products, shapes, faces and instances;
+// names on faces.
 //
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
@@ -10,20 +11,28 @@
 #include <IFSelect_ReturnStatus.hxx>
 #include <STEPCAFControl_Writer.hxx>
 #include <STEPControl_Writer.hxx>
+#include <StepRepr_RepresentationItem.hxx>
+#include <TCollection_HAsciiString.hxx>
 #include <TCollection_ExtendedString.hxx>
 #include <TDF_Label.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDocStd_Document.hxx>
 #include <TopLoc_Location.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TransferBRep.hxx>
+#include <TransferBRep_ShapeMapper.hxx>
+#include <Transfer_FinderProcess.hxx>
 #include <Quantity_Color.hxx>
 #include <XCAFDoc_ColorTool.hxx>
 #include <XCAFDoc_DocumentTool.hxx>
 #include <XCAFDoc_ShapeTool.hxx>
+#include <XSControl_TransferWriter.hxx>
+#include <XSControl_WorkSession.hxx>
 #include <gp_Trsf.hxx>
 
 #include <cmath>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 namespace occtwasm {
@@ -69,14 +78,60 @@ Quantity_Color colorOf(const val& v, const char* name)
   return Quantity_Color(c[0], c[1], c[2], Quantity_TOC_sRGB);
 }
 
+// Faces given by name and the STEP name of each.
+using FaceNames = std::vector<std::pair<TopoDS_Shape, std::string>>;
+
+// The faces of one entry {shape, faces} of `list` (faceColors or faceNames),
+// faces by TopExp::MapShapes index of shape `shape` of the product.
+std::vector<TopoDS_Shape> facesOf(const val&              entry,
+                                  const std::vector<int>& ids,
+                                  const std::string&      where,
+                                  const std::string&      list)
+{
+  const int index = toInt(entry["shape"], (list + "[].shape").c_str());
+  if (index < 0 || static_cast<size_t>(index) >= ids.size())
+  {
+    fail("INVALID_ARGUMENT", where + "." + list + "[].shape is out of range");
+  }
+  const ShapeMap            faces = mapOf(arena().get(ids[static_cast<size_t>(index)]), TopAbs_FACE);
+  std::vector<TopoDS_Shape> out;
+  for (int f : toInts(entry["faces"], (list + "[].faces").c_str()))
+  {
+    if (f < 0 || f >= faces.Extent())
+    {
+      fail("INVALID_ARGUMENT", where + "." + list + "[].faces: no face " + std::to_string(f));
+    }
+    out.push_back(faces(f + 1));
+  }
+  return out;
+}
+
+// The entries of an optional array `list` of the spec.
+int entriesOf(const val& spec, const std::string& where, const std::string& list)
+{
+  const val entries = spec[list];
+  if (!given(entries))
+  {
+    return 0;
+  }
+  if (!entries.isArray())
+  {
+    fail("INVALID_ARGUMENT", where + "." + list + " must be an array");
+  }
+  return entries["length"].as<int>();
+}
+
 // A product of `ids` (a compound when there are several) with its colours:
 // `color` on the product, `shapeColors[i]` on shape i, and `faceColors`
-// ({shape, faces, color}, faces by TopExp::MapShapes index of that shape).
+// ({shape, faces, color}, faces by TopExp::MapShapes index of that shape);
+// and `faceNames` ({shape, faces, name}) on face sub-shape labels, also
+// collected into `named` for the writer.
 TDF_Label addProduct(const occ::handle<XCAFDoc_ShapeTool>& tool,
                      const occ::handle<XCAFDoc_ColorTool>& colors,
                      const std::vector<int>&               ids,
                      const val&                            spec,
-                     const std::string&                    where)
+                     const std::string&                    where,
+                     FaceNames&                            named)
 {
   if (ids.empty())
   {
@@ -126,44 +181,49 @@ TDF_Label addProduct(const occ::handle<XCAFDoc_ShapeTool>& tool,
       colors->SetColor(sub, colorOf(c, (where + ".shapeColors[]").c_str()), XCAFDoc_ColorSurf);
     }
   }
-  const val faceColors = spec["faceColors"];
-  if (given(faceColors))
+  const int colored = entriesOf(spec, where, "faceColors");
+  for (int i = 0; i < colored; ++i)
   {
-    if (!faceColors.isArray())
+    const val            entry = spec["faceColors"][i];
+    const Quantity_Color color = colorOf(entry["color"], "faceColors[].color");
+    for (const TopoDS_Shape& face : facesOf(entry, ids, where, "faceColors"))
     {
-      fail("INVALID_ARGUMENT", where + ".faceColors must be an array");
+      const TDF_Label sub = tool->AddSubShape(label, face);
+      if (sub.IsNull())
+      {
+        fail("INVALID_ARGUMENT", where + ".faceColors: face is not part of the product");
+      }
+      colors->SetColor(sub, color, XCAFDoc_ColorSurf);
     }
-    const int count = faceColors["length"].as<int>();
-    for (int i = 0; i < count; ++i)
+  }
+  const int names = entriesOf(spec, where, "faceNames");
+  for (int i = 0; i < names; ++i)
+  {
+    const val         entry = spec["faceNames"][i];
+    const std::string name  = stringOf(entry["name"], (where + ".faceNames[].name").c_str());
+    if (name.empty())
     {
-      const val entry = faceColors[i];
-      const int index = toInt(entry["shape"], "faceColors[].shape");
-      if (index < 0 || static_cast<size_t>(index) >= ids.size())
+      fail("INVALID_ARGUMENT", where + ".faceNames[].name must be a non-empty string");
+    }
+    for (const TopoDS_Shape& face : facesOf(entry, ids, where, "faceNames"))
+    {
+      const TDF_Label sub = tool->AddSubShape(label, face);
+      if (sub.IsNull())
       {
-        fail("INVALID_ARGUMENT", where + ".faceColors[].shape is out of range");
+        fail("INVALID_ARGUMENT", where + ".faceNames: face is not part of the product");
       }
-      const ShapeMap         faces = mapOf(arena().get(ids[static_cast<size_t>(index)]), TopAbs_FACE);
-      const Quantity_Color   color = colorOf(entry["color"], "faceColors[].color");
-      const std::vector<int> picks = toInts(entry["faces"], "faceColors[].faces");
-      for (int f : picks)
-      {
-        if (f < 0 || f >= faces.Extent())
-        {
-          fail("INVALID_ARGUMENT", where + ".faceColors[].faces: no face " + std::to_string(f));
-        }
-        const TDF_Label sub = tool->AddSubShape(label, faces(f + 1));
-        if (sub.IsNull())
-        {
-          fail("INVALID_ARGUMENT", where + ".faceColors: face is not part of the product");
-        }
-        colors->SetColor(sub, color, XCAFDoc_ColorSurf);
-      }
+      setName(sub, name);
+      named.emplace_back(face, name);
     }
   }
   return label;
 }
 
-val writeDocument(const occ::handle<TDocStd_Document>& doc)
+// Face names go on the faces' representation items (ADVANCED_FACE), as
+// STEPCAFControl_Writer writes names of sub-shape labels with
+// write.stepcaf.subshapes.name on; that switch also walks the components
+// of assemblies, so only the faces of products are named here.
+val writeDocument(const occ::handle<TDocStd_Document>& doc, const FaceNames& named)
 {
   STEPCAFControl_Writer writer;
   writer.SetNameMode(true);
@@ -171,6 +231,21 @@ val writeDocument(const occ::handle<TDocStd_Document>& doc)
   if (!writer.Transfer(doc, STEPControl_AsIs))
   {
     fail("STEP_WRITE_FAILED", "cannot transfer the document to STEP");
+  }
+  if (!named.empty())
+  {
+    const occ::handle<Transfer_FinderProcess>& process =
+      writer.ChangeWriter().WS()->TransferWriter()->FinderProcess();
+    for (const auto& [face, name] : named)
+    {
+      occ::handle<StepRepr_RepresentationItem> item;
+      if (!process->FindTypedTransient(TransferBRep::ShapeMapper(process, face),
+                                       STANDARD_TYPE(StepRepr_RepresentationItem), item))
+      {
+        fail("STEP_WRITE_FAILED", "cannot name face '" + name + "'");
+      }
+      item->SetName(new TCollection_HAsciiString(name.c_str()));
+    }
   }
   std::ostringstream os;
   if (writer.ChangeWriter().WriteStream(os) != IFSelect_RetDone)
@@ -190,8 +265,9 @@ val exportStepColored(val shapes, val options)
     occ::handle<TDocStd_Document>  doc    = new TDocStd_Document("MDTV-XCAF");
     occ::handle<XCAFDoc_ShapeTool> tool   = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
     occ::handle<XCAFDoc_ColorTool> colors = XCAFDoc_DocumentTool::ColorTool(doc->Main());
-    addProduct(tool, colors, toInts(shapes, "shapes"), options, "options");
-    return writeDocument(doc);
+    FaceNames named;
+    addProduct(tool, colors, toInts(shapes, "shapes"), options, "options", named);
+    return writeDocument(doc, named);
   });
 }
 
@@ -345,10 +421,12 @@ val exportStepAssembly(val assembly)
     setName(root, stringOf(assembly["name"], "name"));
 
     std::vector<TDF_Label> products;
+    FaceNames              named;
     for (int i = 0; i < partCount; ++i)
     {
       const val part = parts[i];
-      products.push_back(addProduct(tool, colors, toInts(part["shapes"], "parts[].shapes"), part, "parts[]"));
+      products.push_back(
+        addProduct(tool, colors, toInts(part["shapes"], "parts[].shapes"), part, "parts[]", named));
     }
 
     // Every assembly label before any component, so instances can refer to
@@ -368,7 +446,7 @@ val exportStepAssembly(val assembly)
     }
     addComponents(tool, colors, root, top, products, assemblies, "instances");
     tool->UpdateAssemblies();
-    return writeDocument(doc);
+    return writeDocument(doc, named);
   });
 }
 

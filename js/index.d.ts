@@ -377,7 +377,7 @@ export interface HelixOptions {
   taper?: number;
 }
 
-/** Colours of one STEP product (sRGB in [0, 1]). */
+/** Colours (sRGB in [0, 1]) and face names of one STEP product. */
 export interface StepColors {
   /** The product's surface colour. */
   color?: Vec3;
@@ -385,6 +385,11 @@ export interface StepColors {
   shapeColors?: ReadonlyArray<Vec3 | null>;
   /** Faces by index in TopExp::MapShapes order of shape `shape` (an index into the shapes). */
   faceColors?: ReadonlyArray<{ shape: number; faces: ArrayLike<number>; color: Vec3 }>;
+  /**
+   * Names of faces, e.g. cosmetic threads (0.10.0), written as the names of
+   * the faces in STEP (UTF-8, non-empty). Faces as in faceColors.
+   */
+  faceNames?: ReadonlyArray<{ shape: number; faces: ArrayLike<number>; name: string }>;
 }
 
 export interface StepExportOptions extends StepColors {
@@ -410,6 +415,8 @@ export interface StepPart {
   color?: [number, number, number];
   /** Faces whose colour differs from `color`, by index in TopExp::MapShapes order of `shape`. */
   faceColors?: { face: number; color: [number, number, number] }[];
+  /** Faces with a name in the file (0.10.0), by index in TopExp::MapShapes order of `shape`. */
+  faceNames?: { face: number; name: string }[];
   /**
    * Placement from the file's root, a row-major 3x4 rigid motion as
    * exportStepAssembly reads it: the instances' matrices composed.

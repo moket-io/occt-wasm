@@ -50,7 +50,7 @@ Full reference with exact types and semantics: [API.md](API.md). Types: [`js/ind
 | Operations   | `extrude`, `revolve`, `boolean('fuse' \| 'cut' \| 'common')`, `fillet`, `chamfer`, `transform`, `thickSolid`, `offsetShape`, `draft`, `sweep`, `loft` |
 | Queries      | `topology`, `properties`, `check`, `distance`, `mesh`                                   |
 | Drawings     | `project` (exact hidden line removal with the source edge of every curve)               |
-| Exchange     | `exportStep`, `importStep`, `importStepParts` (XCAF, part by part), `exportBrep`, `importBrep`, `exportStepAssembly` (XCAF products and instances) |
+| Exchange     | `exportStep`, `importStep`, `importStepParts` (XCAF, part by part), `exportBrep`, `importBrep`, `exportStepAssembly` (XCAF products and instances; colours and face names both ways) |
 
 Operations return a **history**: for every input sub-shape (face, edge, vertex, by index in `TopExp::MapShapes` order) which result sub-shapes it was modified into, which it generated (with their kind), whether it was deleted, or whether it is present unchanged. Extrude and revolve also report the bottom, top and per-profile-edge side faces, and `makeProfileFace` maps every sketch segment to its edge index. Moket builds topological naming on top of this in TypeScript.
 
@@ -60,7 +60,7 @@ Operations return a **history**: for every input sub-shape (face, edge, vertex, 
 | ---------- | -------------------------------------------------------------------------------------- |
 | OCCT       | 8.0.1, `V8_0_1` = `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` (submodule `third_party/occt`) |
 | Emscripten | 6.0.12, image `emscripten/emsdk:6.0.12@sha256:77638e6c215a65f25a704c0c831d5c2463a8c0468a58c6cb82489dbe621dfa05` |
-| Facade     | 0.9.0                                                                                  |
+| Facade     | 0.10.0                                                                                 |
 
 All pins and compiler flags are in [`versions.json`](versions.json) (shipped in `dist/`) and [`scripts/config-occt.sh`](scripts/config-occt.sh) / [`scripts/config.sh`](scripts/config.sh); CI checks that they agree.
 

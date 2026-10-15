@@ -1,6 +1,7 @@
 // STEP import through XCAF: one result per solid with the names and colors
-// from the file, open shells apart, units and optional healing, and the
-// assembly structure (products, instances and their placements).
+// from the file, names of faces, open shells apart, units and optional
+// healing, and the assembly structure (products, instances and their
+// placements).
 //
 // SPDX-License-Identifier: LGPL-2.1-only
 #include "api.hpp"
@@ -11,6 +12,7 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <DESTEP_Parameters.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <NCollection_Sequence.hxx>
 #include <Precision.hxx>
@@ -215,6 +217,22 @@ bool faceColorOf(const occ::handle<XCAFDoc_ColorTool>& colors,
   return false;
 }
 
+// A face's name: of its sub-shape label in the product (STEP names of
+// faces read with read.stepcaf.subshapes.name), found like its colour.
+std::string faceNameOf(const occ::handle<XCAFDoc_ShapeTool>& shapes,
+                       const TDF_Label&                      product,
+                       const TopoDS_Shape&                   face,
+                       const TopLoc_Location&                placement)
+{
+  TDF_Label sub;
+  if (shapes->FindSubShape(product, face.Moved(placement.Inverted()), sub)
+      || shapes->FindSubShape(product, face, sub))
+  {
+    return nameOf(sub);
+  }
+  return std::string();
+}
+
 val colorToJs(const Quantity_Color& c)
 {
   double r = 0, g = 0, b = 0;
@@ -289,7 +307,11 @@ val importStepParts(val bytes, val options)
     reader.SetGDTMode(false);
     reader.SetMatMode(false);
     reader.SetViewMode(false);
-    if (reader.ReadStream("model.step", is) != IFSelect_RetDone)
+    // Names of faces (and of other sub-shapes) onto sub-shape labels.
+    DESTEP_Parameters params;
+    params.InitFromStatic();
+    params.ReadSubshapeNames = true;
+    if (reader.ChangeReader().ReadStream("model.step", params, is) != IFSelect_RetDone)
     {
       fail("STEP_READ_FAILED", "cannot parse STEP data");
     }
@@ -417,6 +439,24 @@ val importStepParts(val bytes, val options)
         if (colored > 0)
         {
           part.set("faceColors", faceColors);
+        }
+        // Faces with a name in the file, by face map index.
+        val faceNames = val::array();
+        int named     = 0;
+        for (int f = 1; f <= faces.Extent(); ++f)
+        {
+          const std::string name = faceNameOf(shapes, leaf.product, faces(f), placement);
+          if (!name.empty())
+          {
+            val entry = val::object();
+            entry.set("face", f - 1);
+            entry.set("name", name);
+            faceNames.set(named++, entry);
+          }
+        }
+        if (named > 0)
+        {
+          part.set("faceNames", faceNames);
         }
         parts.set(n++, part);
       }
