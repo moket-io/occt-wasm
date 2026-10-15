@@ -13,6 +13,7 @@
 #include <BRepGProp_Domain.hxx>
 #include <BRepGProp_Face.hxx>
 #include <BRepGProp_Vinert.hxx>
+#include <BRepGProp_VinertGK.hxx>
 #include <BRepLProp_SLProps.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
@@ -213,12 +214,15 @@ GProp_GProps computeVolume(const TopoDS_Face& face)
     BD.Init(face);
     if (acrossSplineKnots(face))
     {
-      G.Perform(BF, BD, kSplineEps);
+      // Gauss-Kronrod, adaptive, split at the knots of an extruded spline.
+      BRepGProp_VinertGK GK;
+      GK.SetLocation(gp::Origin());
+      BRepGProp_Face SF(true);
+      SF.Load(face);
+      GK.Perform(SF, BD, kSplineEps, true, false);
+      return GK;
     }
-    else
-    {
-      G.Perform(BF, BD);
-    }
+    G.Perform(BF, BD);
   }
   return G;
 }

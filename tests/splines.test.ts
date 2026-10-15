@@ -229,6 +229,7 @@ describe('bspline profile segments', () => {
     const p = ok(k.properties(ok(k.extrude(profile.shape, [0, 0, 1], 2)).shape));
     expect(p.valid).toBe(true);
     [-10, -10, 0, 10, 10, 2].forEach((v, i) => expect(p.bbox[i]).toBeCloseTo(v, 6));
+    console.log('DIAG C0 area', relErr(ok(k.topology(profile.shape)).faces[0].area, 1000 / 3), 'volume', relErr(p.volume, 2000 / 3));
     expect(relErr(p.volume, (2 * 1000) / 3)).toBeLessThan(1e-9);
   });
 
@@ -251,6 +252,7 @@ describe('bspline profile segments', () => {
     const profile = ok(k.makeProfileFace(XY, [[spline, line([40, 0], [0, 0])]]));
     const p = ok(k.properties(ok(k.extrude(profile.shape, [0, 0, 1], 10)).shape));
     expect(p.valid).toBe(true);
+    console.log('DIAG C2 area', relErr(ok(k.topology(profile.shape)).faces[0].area, area), 'volume', relErr(p.volume, 10 * area));
     expect(relErr(p.volume, 10 * area)).toBeLessThan(1e-9);
   });
 
