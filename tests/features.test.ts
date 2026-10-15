@@ -638,8 +638,9 @@ describe('helix', () => {
     const height = 20;
     const h = ok(k.helix([0, 0, 0], [0, 0, 1], R, pitch, height, { taper, xDir: [0, 1, 0] }));
     const points = ok(k.topology(h.shape)).vertices.map((v) => v.point);
-    const top = points.find((p) => p[2] > 1)!;
-    const bottom = points.find((p) => p[2] < 1)!;
+    const top = points.reduce((p, q) => (q[2] > p[2] ? q : p));
+    const bottom = points.reduce((p, q) => (q[2] < p[2] ? q : p));
+    expect(top[2]).toBeCloseTo(height, 6);
     expect(bottom[1]).toBeCloseTo(R, 6);
     expect(Math.hypot(top[0], top[1])).toBeCloseTo(R + height * Math.tan(taper), 6);
   });
