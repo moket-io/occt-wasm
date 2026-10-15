@@ -46,7 +46,7 @@ Full reference with exact types and semantics: [API.md](API.md). Types: [`js/ind
 | Group        | Calls                                                                                   |
 | ------------ | --------------------------------------------------------------------------------------- |
 | Module       | `version()`, `heapStats()`, `release(id)`, `releaseAll()`                               |
-| Construction | `makeBox`, `makeCylinder`, `makeVertex`, `makeProfileFace(plane, loops)` (lines, arcs, circles, holes), `makeWire`, `joinEdges` |
+| Construction | `makeBox`, `makeCylinder`, `makeVertex`, `makeProfileFace(plane, loops)` (lines, arcs, circles, B-splines, holes), `makeWire`, `joinEdges` |
 | Operations   | `extrude`, `revolve`, `boolean('fuse' \| 'cut' \| 'common')`, `fillet`, `chamfer`, `transform`, `thickSolid`, `offsetShape`, `draft`, `sweep`, `loft` |
 | Queries      | `topology`, `properties`, `check`, `distance`, `mesh`                                   |
 | Drawings     | `project` (exact hidden line removal with the source edge of every curve)               |
@@ -60,7 +60,7 @@ Operations return a **history**: for every input sub-shape (face, edge, vertex, 
 | ---------- | -------------------------------------------------------------------------------------- |
 | OCCT       | 8.0.1, `V8_0_1` = `b8f597c677811d1f9f4d8a97f5ae2825c0353a42` (submodule `third_party/occt`) |
 | Emscripten | 6.0.12, image `emscripten/emsdk:6.0.12@sha256:77638e6c215a65f25a704c0c831d5c2463a8c0468a58c6cb82489dbe621dfa05` |
-| Facade     | 0.8.0                                                                                  |
+| Facade     | 0.9.0                                                                                  |
 
 All pins and compiler flags are in [`versions.json`](versions.json) (shipped in `dist/`) and [`scripts/config-occt.sh`](scripts/config-occt.sh) / [`scripts/config.sh`](scripts/config.sh); CI checks that they agree.
 

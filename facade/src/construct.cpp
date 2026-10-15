@@ -14,20 +14,26 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepLib.hxx>
 #include <BRep_Builder.hxx>
+#include <Geom2d_BSplineCurve.hxx>
 #include <Geom2d_Line.hxx>
+#include <Geom_BSplineCurve.hxx>
 #include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
+#include <NCollection_Array1.hxx>
 #include <Precision.hxx>
+#include <Standard_Real.hxx>
 #include <TopExp.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
+#include <gp.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Pnt2d.hxx>
 
 #include <algorithm>
 #include <cmath>
@@ -79,19 +85,164 @@ enum class SegKind
 {
   Line,
   Arc,
-  Circle
+  Circle,
+  BSpline
 };
 
 struct Segment
 {
   SegKind kind = SegKind::Line;
-  Vec2    a, b;        // line: a -> b; arc: start -> end
+  Vec2    a, b;        // line: a -> b; arc: start -> end; bspline: first -> last pole
   Vec2    center;      // arc, circle
   double  radius = 0;  // arc, circle
   bool    ccw    = true;
+  // bspline: a clamped (non-periodic) B-spline in plane coordinates.
+  std::vector<Vec2>                poles;
+  std::vector<double>              knots;
+  std::vector<int>                 mults;
+  std::vector<double>              weights; // empty: non-rational
+  int                              degree = 0;
+  occ::handle<Geom2d_BSplineCurve> curve; // for sampling
 };
 
+// Highest B-spline degree accepted (OCCT goes up to 25; fonts and sketches
+// need 2 and 3).
+constexpr int kMaxSplineDegree = 8;
+
+// Validates a B-spline segment as Geom_BSplineCurve would, so that bad input
+// is INVALID_ARGUMENT naming the segment instead of a construction error, and
+// asks for clamped ends so that the curve ends at its first and last poles.
+void parseBSpline(const val& s, const std::string& where, Segment& seg)
+{
+  const val poles = s["poles"];
+  if (poles.isUndefined() || poles.isNull() || !poles.isArray())
+  {
+    fail("INVALID_ARGUMENT", where + ": bspline.poles must be an array of points");
+  }
+  const int nPoles = poles["length"].as<int>();
+  for (int i = 0; i < nPoles; ++i)
+  {
+    seg.poles.push_back(toVec2(poles[i], "bspline pole"));
+  }
+  seg.degree = toInt(s["degree"], "bspline.degree");
+  seg.knots  = toDoubles(s["knots"], "bspline.knots", -1);
+  seg.mults  = toInts(s["multiplicities"], "bspline.multiplicities");
+  const int p = seg.degree;
+  if (p < 1 || p > kMaxSplineDegree)
+  {
+    fail("INVALID_ARGUMENT",
+         where + ": bspline degree must be 1 to " + std::to_string(kMaxSplineDegree));
+  }
+  if (nPoles < p + 1)
+  {
+    fail("INVALID_ARGUMENT", where + ": bspline needs at least degree + 1 poles");
+  }
+  const size_t nKnots = seg.knots.size();
+  if (nKnots < 2 || seg.mults.size() != nKnots)
+  {
+    fail("INVALID_ARGUMENT",
+         where + ": bspline needs at least 2 knots and one multiplicity per knot");
+  }
+  for (size_t i = 1; i < nKnots; ++i)
+  {
+    if (!(seg.knots[i] - seg.knots[i - 1] > Epsilon(std::abs(seg.knots[i - 1]))))
+    {
+      fail("INVALID_ARGUMENT", where + ": bspline knots must be strictly increasing");
+    }
+  }
+  int sum = 0;
+  for (size_t i = 0; i < nKnots; ++i)
+  {
+    const int  m   = seg.mults[i];
+    const bool end = i == 0 || i == nKnots - 1;
+    if (end ? m != p + 1 : (m < 1 || m > p))
+    {
+      fail("INVALID_ARGUMENT",
+           where
+             + ": bspline multiplicities must be degree + 1 at both ends (clamped) and 1 to degree inside");
+    }
+    sum += m;
+  }
+  if (sum != nPoles + p + 1)
+  {
+    fail("INVALID_ARGUMENT", where + ": bspline multiplicities must add up to poles + degree + 1");
+  }
+  if (!s["weights"].isUndefined() && !s["weights"].isNull())
+  {
+    seg.weights = toDoubles(s["weights"], "bspline.weights", -1);
+    if (seg.weights.size() != static_cast<size_t>(nPoles))
+    {
+      fail("INVALID_ARGUMENT", where + ": bspline needs one weight per pole");
+    }
+    for (double w : seg.weights)
+    {
+      if (w <= gp::Resolution())
+      {
+        fail("INVALID_ARGUMENT", where + ": bspline weights must be positive");
+      }
+    }
+  }
+  seg.a = seg.poles.front();
+  seg.b = seg.poles.back();
+  const bool degenerate = std::all_of(seg.poles.begin(), seg.poles.end(), [&](const Vec2& q) {
+    return dist2d(q, seg.a) <= Precision::Confusion();
+  });
+  if (degenerate)
+  {
+    fail("INVALID_PROFILE", where + ": zero-length bspline");
+  }
+
+  NCollection_Array1<gp_Pnt2d> pts(1, nPoles);
+  for (int i = 0; i < nPoles; ++i)
+  {
+    pts.SetValue(i + 1, gp_Pnt2d(seg.poles[i].x, seg.poles[i].y));
+  }
+  NCollection_Array1<double> knots(1, static_cast<int>(nKnots));
+  NCollection_Array1<int>    mults(1, static_cast<int>(nKnots));
+  for (size_t i = 0; i < nKnots; ++i)
+  {
+    knots.SetValue(static_cast<int>(i) + 1, seg.knots[i]);
+    mults.SetValue(static_cast<int>(i) + 1, seg.mults[i]);
+  }
+  if (seg.weights.empty())
+  {
+    seg.curve = new Geom2d_BSplineCurve(pts, knots, mults, p);
+  }
+  else
+  {
+    NCollection_Array1<double> weights(1, nPoles);
+    for (int i = 0; i < nPoles; ++i)
+    {
+      weights.SetValue(i + 1, seg.weights[i]);
+    }
+    seg.curve = new Geom2d_BSplineCurve(pts, weights, knots, mults, p);
+  }
+}
+
+Segment parseSegmentData(const val& s, const std::string& where);
+
+// A segment from JS; every error names the segment.
 Segment parseSegment(const val& s, const std::string& where)
+{
+  try
+  {
+    return parseSegmentData(s, where);
+  }
+  catch (FacadeError& e)
+  {
+    if (e.message.rfind(where, 0) != 0)
+    {
+      e.message = where + ": " + e.message;
+    }
+    throw;
+  }
+  catch (const Standard_Failure& e)
+  {
+    fail("INVALID_ARGUMENT", where + ": " + e.ExceptionType() + " " + e.what());
+  }
+}
+
+Segment parseSegmentData(const val& s, const std::string& where)
 {
   if (s.isUndefined() || s.isNull() || !s["kind"].isString())
   {
@@ -134,6 +285,11 @@ Segment parseSegment(const val& s, const std::string& where)
     seg.center = toVec2(s["center"], "circle.center");
     seg.radius = positive(s["radius"], "circle.radius");
   }
+  else if (kind == "bspline")
+  {
+    seg.kind = SegKind::BSpline;
+    parseBSpline(s, where, seg);
+  }
   else
   {
     fail("INVALID_ARGUMENT", where + ": unknown segment kind '" + kind + "'");
@@ -151,6 +307,20 @@ double signedArea(const std::vector<Segment>& loop)
     if (s.kind == SegKind::Line)
     {
       pts.push_back(s.a);
+    }
+    else if (s.kind == SegKind::BSpline)
+    {
+      // Samples in every knot span, the last point is the next segment's start.
+      const int perSpan = 4 * s.degree + 4;
+      for (size_t k = 0; k + 1 < s.knots.size(); ++k)
+      {
+        for (int i = 0; i < perSpan; ++i)
+        {
+          const double   u = s.knots[k] + (s.knots[k + 1] - s.knots[k]) * i / perSpan;
+          const gp_Pnt2d q = s.curve->Value(u);
+          pts.push_back({q.X(), q.Y()});
+        }
+      }
     }
     else if (s.kind == SegKind::Circle)
     {
@@ -215,6 +385,24 @@ PlaneFrame toFrame(const val& plane)
     fail("INVALID_ARGUMENT", "plane.xDir must not be parallel to plane.normal");
   }
   return PlaneFrame{gp_Ax3(origin, normal, xDir)};
+}
+
+// The B-spline of a segment in 3D: the same knots and weights, the poles
+// mapped onto the plane (an affine map keeps the curve exact).
+occ::handle<Geom_BSplineCurve> splineOnPlane(const Segment& s, const PlaneFrame& frame)
+{
+  const occ::handle<Geom2d_BSplineCurve>& c = s.curve;
+  NCollection_Array1<gp_Pnt>              poles(1, c->NbPoles());
+  for (int i = 1; i <= c->NbPoles(); ++i)
+  {
+    const gp_Pnt2d& q = c->Pole(i);
+    poles.SetValue(i, frame.to3d({q.X(), q.Y()}));
+  }
+  if (c->IsRational())
+  {
+    return new Geom_BSplineCurve(poles, *c->Weights(), c->Knots(), c->Multiplicities(), c->Degree());
+  }
+  return new Geom_BSplineCurve(poles, c->Knots(), c->Multiplicities(), c->Degree());
 }
 
 // Builds a wire from a closed loop. Consecutive segments share vertices.
@@ -285,6 +473,17 @@ TopoDS_Wire buildWire(const std::vector<Segment>& loop,
       if (!me.IsDone())
       {
         fail("INVALID_PROFILE", where + ": cannot build line " + std::to_string(i));
+      }
+      edge = me.Edge();
+    }
+    else if (s.kind == SegKind::BSpline)
+    {
+      // Clamped: the ends are the first and last poles, at the parameter bounds.
+      const occ::handle<Geom_BSplineCurve> curve = splineOnPlane(s, frame);
+      BRepBuilderAPI_MakeEdge me(curve, v1, v2, curve->FirstParameter(), curve->LastParameter());
+      if (!me.IsDone())
+      {
+        fail("INVALID_PROFILE", where + ": cannot build bspline " + std::to_string(i));
       }
       edge = me.Edge();
     }
@@ -538,6 +737,16 @@ val makeWire(val plane, val segments)
         if (!me.IsDone())
         {
           fail("INVALID_PROFILE", where + ": cannot build the line");
+        }
+        edges.push_back(me.Edge());
+        continue;
+      }
+      if (s.kind == SegKind::BSpline)
+      {
+        BRepBuilderAPI_MakeEdge me(splineOnPlane(s, frame));
+        if (!me.IsDone())
+        {
+          fail("INVALID_PROFILE", where + ": cannot build the bspline");
         }
         edges.push_back(me.Edge());
         continue;

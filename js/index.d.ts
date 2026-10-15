@@ -91,7 +91,27 @@ export interface CircleSegment {
   radius: number;
 }
 
-export type Segment = LineSegment | ArcSegment | CircleSegment;
+/**
+ * A clamped (non-periodic) B-spline in plane coordinates, possibly rational
+ * (0.9.0). It starts at its first pole and ends at its last. Validated as
+ * OCCT does: degree 1 to 8, at least degree + 1 poles, strictly increasing
+ * knots, multiplicities degree + 1 at both ends and 1 to degree inside,
+ * adding up to poles + degree + 1, one positive weight per pole. A quadratic
+ * or cubic Bezier is degree 2 or 3 with knots [0, 1] and multiplicities
+ * [3, 3] or [4, 4]. A spline whose last pole is its first can be a loop by
+ * itself.
+ */
+export interface BSplineSegment {
+  kind: 'bspline';
+  poles: readonly Vec2[];
+  knots: readonly number[];
+  multiplicities: readonly number[];
+  degree: number;
+  /** Omitted: non-rational (all weights 1). */
+  weights?: readonly number[];
+}
+
+export type Segment = LineSegment | ArcSegment | CircleSegment | BSplineSegment;
 
 /**
  * Closed loop: each segment ends where the next one starts (gap <= 1e-6 mm),

@@ -1,6 +1,6 @@
 # occt-wasm API
 
-The module exports one ESM entry point, `dist/index.mjs`, with hand-written types in `dist/index.d.ts`. This document describes the API of facade version 0.8.0 (OCCT 8.0.1).
+The module exports one ESM entry point, `dist/index.mjs`, with hand-written types in `dist/index.d.ts`. This document describes the API of facade version 0.9.0 (OCCT 8.0.1).
 
 ```ts
 import { createOcctKernel } from '@moket/occt-wasm';
@@ -65,7 +65,7 @@ joinEdges(parts: { shape: ShapeId; edges?: number[] }[]): Result<{ shape: ShapeI
 
 ### Wires (makeWire, joinEdges)
 
-Paths for `sweep`, open or closed. `makeWire` takes sketch segments (same `Segment` as `makeProfileFace`), `joinEdges` takes edges of shapes by `topology()` index (all edges of a shape when `edges` is omitted), so a path can mix a sketch wire and body edges. In both, the edges come in any order and direction: they are chained end to end (gap up to 1e-6 mm) from an open end and rebuilt with `BRepBuilderAPI_MakeWire`, so consecutive edges share their vertices. A path that falls apart or branches is `PATH_NOT_CONNECTED`, with the point of the gap or branch in the message. `segmentEdges[i]` (makeWire) and `edges[part][i]` (joinEdges) give the edge index in the wire of each input edge.
+Paths for `sweep`, open or closed. `makeWire` takes sketch segments (same `Segment` as `makeProfileFace`, B-splines included), `joinEdges` takes edges of shapes by `topology()` index (all edges of a shape when `edges` is omitted), so a path can mix a sketch wire and body edges. In both, the edges come in any order and direction: they are chained end to end (gap up to 1e-6 mm) from an open end and rebuilt with `BRepBuilderAPI_MakeWire`, so consecutive edges share their vertices. A path that falls apart or branches is `PATH_NOT_CONNECTED`, with the point of the gap or branch in the message. `segmentEdges[i]` (makeWire) and `edges[part][i]` (joinEdges) give the edge index in the wire of each input edge.
 
 ### makeProfileFace
 
@@ -77,13 +77,15 @@ type Loop = Segment[];
 type Segment =
   | { kind: 'line'; a: Vec2; b: Vec2 }
   | { kind: 'arc'; center: Vec2; radius: number; start: Vec2; end: Vec2; ccw?: boolean }
-  | { kind: 'circle'; center: Vec2; radius: number };
+  | { kind: 'circle'; center: Vec2; radius: number }
+  | { kind: 'bspline'; poles: Vec2[]; knots: number[]; multiplicities: number[]; degree: number; weights?: number[] };
 ```
 
 - 2D coordinates are in the plane frame: `u` along `xDir` (projected to be orthogonal to `normal`), `v` along `yDir = normal x xDir`.
 - `loops[0]` is the outer boundary, the other loops are holes.
 - A loop is an ordered, closed chain: each segment ends where the next one starts (gap up to 1e-6 mm) and the last ends where the first starts. A `circle` is a loop on its own.
 - An arc goes from `start` to `end` counter-clockwise around the plane normal when `ccw` is `true` (default), clockwise otherwise. `start` and `end` must lie on the circle (1e-6 relative).
+- A `bspline` (0.9.0) is a clamped (non-periodic) B-spline, rational when `weights` are given, for sketch splines and text outlines. It is built as a `Geom_BSplineCurve` with the poles mapped onto the plane (exact) and starts at its first pole and ends at its last, which is where it must meet its neighbours. Input is checked as OCCT checks it, plus the clamped ends, and fails with `INVALID_ARGUMENT` naming the segment: degree 1 to 8, at least `degree + 1` poles, at least 2 strictly increasing knots, one multiplicity per knot, `degree + 1` at both ends and 1 to `degree` inside, adding up to `poles + degree + 1`, one weight (> 0) per pole. Poles that all coincide are `INVALID_PROFILE`. A quadratic or cubic Bezier is degree 2 or 3 with `knots: [0, 1]` and `multiplicities: [3, 3]` or `[4, 4]`; a glyph outline is a loop of many of them (and lines). A spline whose last pole is its first can be a loop by itself. Loop orientation is decided from samples of the curve in every knot span.
 - Loop direction does not matter: the outer loop is oriented counter-clockwise and holes clockwise automatically, so the face normal is always `plane.normal`.
 - The result face is checked with `BRepCheck_Analyzer`; self-intersecting loops or holes outside the outer loop give `INVALID_PROFILE`.
 
