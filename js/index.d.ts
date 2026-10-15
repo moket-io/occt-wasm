@@ -566,9 +566,11 @@ export interface OcctKernel {
   /** A point, e.g. the tip of a loft. */
   makeVertex(point: Vec3): ShapeResult;
   /**
-   * A helix as a wire of one edge on a cylinder (or a cone with `taper`),
-   * starting at `axisOrigin` + radius along `xDir`, rising `pitch` per turn
-   * up to `height` along the axis; right-handed unless `leftHanded`.
+   * A helix as a wire on a cylinder (or a cone with `taper`), starting at
+   * `axisOrigin` + radius along `xDir`, rising `pitch` per turn up to
+   * `height` along the axis; right-handed unless `leftHanded`. One edge per
+   * turn (0.10.1): ceil(turns) equal pieces, so faces swept along it never
+   * wind around the axis more than once and booleans with them hold.
    */
   helix(axisOrigin: Vec3, axisDir: Vec3, radius: number, pitch: number, height: number, options?: HelixOptions): ShapeResult;
   /**

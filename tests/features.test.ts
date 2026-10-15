@@ -612,10 +612,12 @@ describe('helix', () => {
   it('builds a helix of the right length that ends above its start', () => {
     const h = ok(k.helix([0, 0, 0], [0, 0, 1], R, pitch, turns * pitch));
     const t = ok(k.topology(h.shape));
-    expect(t.edges).toHaveLength(1);
-    expect(relErr(t.edges[0].length, length)).toBeLessThan(1e-6);
-    const ends = t.vertices.map((v) => v.point);
-    const [a, b] = ends[0][2] < ends[1][2] ? ends : [ends[1], ends[0]];
+    // One edge per turn (0.10.1), equal pieces, joined end to end.
+    expect(t.edges).toHaveLength(turns);
+    for (const e of t.edges) expect(relErr(e.length, length / turns)).toBeLessThan(1e-6);
+    expect(t.vertices).toHaveLength(turns + 1);
+    const ends = [...t.vertices.map((v) => v.point)].sort((p, q) => p[2] - q[2]);
+    const [a, b] = [ends[0], ends[ends.length - 1]];
     expect(a[0]).toBeCloseTo(R, 6);
     expect(a[1]).toBeCloseTo(0, 6);
     expect(a[2]).toBeCloseTo(0, 6);

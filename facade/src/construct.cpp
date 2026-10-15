@@ -534,11 +534,14 @@ val makeCylinder(val axisOrigin, val axisDir, val radius, val height)
   });
 }
 
-// A helix as a wire of one edge: a line in the (angle, height) parameters
-// of a cylinder, or of a cone when `taper` (the half angle, radians) is set.
+// A helix as a wire: a line in the (angle, height) parameters of a
+// cylinder, or of a cone when `taper` (the half angle, radians) is set.
 // It starts on `xDir` (or any direction perpendicular to the axis) at the
 // axis origin, turns right-handed about the axis unless `leftHanded`, and
-// rises `pitch` per turn up to `height` along the axis.
+// rises `pitch` per turn up to `height` along the axis. One edge per turn
+// at most, equal pieces: a face swept along an edge that winds around the
+// axis more than once is misclassified by booleans (a thread groove cut
+// from a cylinder removed nothing), one face per turn is not.
 val helix(val axisOrigin, val axisDir, val radius, val pitch, val height, val options)
 {
   return guarded([&] {
@@ -588,17 +591,32 @@ val helix(val axisOrigin, val axisDir, val radius, val pitch, val height, val op
     const double dv    = p * slant;
     const double perTurn = std::sqrt(du * du + dv * dv);
     occ::handle<Geom2d_Line> line = new Geom2d_Line(gp_Pnt2d(0, 0), gp_Dir2d(du, dv));
-    BRepBuilderAPI_MakeEdge  edge(line, surface, 0, turns * perTurn);
-    if (!edge.IsDone())
+    const int                pieces = std::max(1, static_cast<int>(std::ceil(turns - 1e-9)));
+    const double             step   = turns * perTurn / pieces;
+    const auto vertexAt = [&](double t) {
+      const gp_Pnt2d uv = line->Value(t);
+      return BRepBuilderAPI_MakeVertex(surface->Value(uv.X(), uv.Y())).Vertex();
+    };
+    BRepBuilderAPI_MakeWire wire;
+    TopoDS_Vertex           start = vertexAt(0);
+    for (int i = 0; i < pieces; ++i)
     {
-      fail("INVALID_ARGUMENT", "cannot build the helix");
-    }
-    TopoDS_Edge e = edge.Edge();
-    BRepLib::BuildCurves3d(e, 1e-7, GeomAbs_C2, 14, std::max(32, static_cast<int>(std::ceil(turns * 8))));
-    BRepBuilderAPI_MakeWire wire(e);
-    if (!wire.IsDone())
-    {
-      fail("INVALID_ARGUMENT", "cannot build the helix");
+      const double            t0  = i * step;
+      const double            t1  = (i + 1) * step;
+      const TopoDS_Vertex     end = vertexAt(t1);
+      BRepBuilderAPI_MakeEdge edge(line, surface, start, end, t0, t1);
+      if (!edge.IsDone())
+      {
+        fail("INVALID_ARGUMENT", "cannot build the helix");
+      }
+      TopoDS_Edge e = edge.Edge();
+      BRepLib::BuildCurves3d(e, 1e-7, GeomAbs_C2, 14, 32);
+      wire.Add(e);
+      if (!wire.IsDone())
+      {
+        fail("INVALID_ARGUMENT", "cannot build the helix");
+      }
+      start = end;
     }
     return shapeResult(arena().put(wire.Wire()));
   });
