@@ -74,8 +74,10 @@ Store& store()
 // Gauss integration without a tolerance takes a fixed number of points over
 // the whole parameter range of an edge: exact on one polynomial span, not
 // across the knots of a B-spline (1e-5 relative off for a smooth cubic of
-// three spans, 0.5% with corners at the knots). Planar and swept faces bounded
-// by such edges, as sketch splines make them, are integrated adaptively.
+// three spans, 0.5% with corners at the knots). Planar, extruded and revolved
+// faces bounded by such edges, as sketch splines make them, are integrated
+// adaptively: the area with a tolerance, the volume with Gauss-Kronrod (the
+// tolerance variant of Vinert converges badly on corners at knots).
 constexpr double kSplineEps = 1e-10;
 
 bool acrossSplineKnots(const TopoDS_Face& face)
@@ -200,6 +202,18 @@ GProp_GProps computeVolume(const TopoDS_Face& face)
   {
     return GProp_GProps(gp::Origin());
   }
+  if (face.NbChildren() > 0 && acrossSplineKnots(face))
+  {
+    // Adaptive Gauss-Kronrod, split at the knots of an extruded spline.
+    BRepGProp_VinertGK G;
+    G.SetLocation(gp::Origin());
+    BRepGProp_Face   BF(true);
+    BRepGProp_Domain BD;
+    BF.Load(face);
+    BD.Init(face);
+    G.Perform(BF, BD, kSplineEps, true, false);
+    return G;
+  }
   BRepGProp_Vinert G;
   G.SetLocation(gp::Origin());
   BRepGProp_Face BF;
@@ -212,16 +226,6 @@ GProp_GProps computeVolume(const TopoDS_Face& face)
   {
     BRepGProp_Domain BD;
     BD.Init(face);
-    if (acrossSplineKnots(face))
-    {
-      // Gauss-Kronrod, adaptive, split at the knots of an extruded spline.
-      BRepGProp_VinertGK GK;
-      GK.SetLocation(gp::Origin());
-      BRepGProp_Face SF(true);
-      SF.Load(face);
-      GK.Perform(SF, BD, kSplineEps, true, false);
-      return GK;
-    }
     G.Perform(BF, BD);
   }
   return G;
